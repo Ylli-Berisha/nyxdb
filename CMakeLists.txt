@@ -9,8 +9,12 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 # ── Compiler flags ────────────────────────────────────────────────────────────
 add_compile_options(
     -Wall -Wextra -Wpedantic -Wno-unused-parameter
-    $<$<CONFIG:Debug>:-g -O0 -fsanitize=address,undefined>
-    $<$<CONFIG:Release>:-O3 -DNDEBUG -march=native>
+    $<$<CONFIG:Debug>:-g>
+    $<$<CONFIG:Debug>:-O0>
+    $<$<CONFIG:Debug>:-fsanitize=address,undefined>
+    $<$<CONFIG:Release>:-O3>
+    $<$<CONFIG:Release>:-DNDEBUG>
+    $<$<CONFIG:Release>:-march=native>
 )
 add_link_options(
     $<$<CONFIG:Debug>:-fsanitize=address,undefined>
