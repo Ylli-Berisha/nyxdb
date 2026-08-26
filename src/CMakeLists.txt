@@ -1,5 +1,6 @@
 add_library(nyxdb_core STATIC
     common/logger.cpp
+    storage/disk_manager.cpp
 )
 
 target_include_directories(nyxdb_core PUBLIC ${CMAKE_SOURCE_DIR}/src)
