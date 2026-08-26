@@ -18,7 +18,7 @@ using i64 = int64_t;
 using f32 = float;
 using f64 = double;
 
-using byte = u8;
+using byte  = u8;
 using usize = std::size_t;
 
 } // namespace nyx

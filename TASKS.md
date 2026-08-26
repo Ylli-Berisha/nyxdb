@@ -20,16 +20,16 @@
 - [x] `src/common/logger.h` + `logger.cpp` — spdlog wrapper, `NYX_*` macros
 
 ### Storage Primitives
-- [ ] `src/storage/page.h` — `Page` struct, `PageId`, `PAGE_SIZE`
-- [ ] `src/storage/disk_manager.h` + `disk_manager.cpp` — raw page read/write/allocate
-- [ ] `tests/unit/storage/disk_manager_test.cpp`
+- [x] `src/storage/page.h` — `Page` struct, `PageId`, `PAGE_SIZE`
+- [x] `src/storage/disk_manager.h` + `disk_manager.cpp` — raw page read/write/allocate
+- [x] `tests/unit/storage/disk_manager_test.cpp`
 
 ### Entry Point
 - [ ] `src/main.cpp` — parse config, init logger, placeholder server start
 
 ### Exit Criteria
-- [ ] `cmake --build` clean, all tests pass
-- [ ] Page written to disk and read back correctly
+- [x] `cmake --build` clean, all tests pass
+- [x] Page written to disk and read back correctly
 
 ---
 

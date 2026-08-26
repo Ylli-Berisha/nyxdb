@@ -16,10 +16,10 @@ using PageId = u64;
 
 #pragma pack(push, 1)
 struct PageHeader {
-    u64 page_id  = INVALID_PAGE_ID;
-    u64 checksum = 0;
-    u8  flags    = 0;
-    u8  reserved[7] = {};
+    u64 page_id    = INVALID_PAGE_ID;
+    u64 checksum   = 0;
+    u8 flags       = 0;
+    u8 reserved[7] = {};
 };
 #pragma pack(pop)
 
@@ -27,14 +27,14 @@ static_assert(sizeof(PageHeader) == PAGE_HEADER_SIZE, "PageHeader must be 24 byt
 static_assert(PAGE_SIZE == 8192, "PAGE_SIZE must be 8192 bytes");
 
 struct Page {
-    int  pin_count = 0;
-    bool dirty     = false;
+    int pin_count        = 0;
+    bool dirty           = false;
     byte data[PAGE_SIZE] = {};
 
-    PageHeader*       header()       { return reinterpret_cast<PageHeader*>(data); }
+    PageHeader* header() { return reinterpret_cast<PageHeader*>(data); }
     const PageHeader* header() const { return reinterpret_cast<const PageHeader*>(data); }
 
-    byte*       payload()       { return data + PAGE_HEADER_SIZE; }
+    byte* payload() { return data + PAGE_HEADER_SIZE; }
     const byte* payload() const { return data + PAGE_HEADER_SIZE; }
 
     PageId page_id() const { return header()->page_id; }

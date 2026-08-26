@@ -1,9 +1,9 @@
-#include <gtest/gtest.h>
 #include "storage/disk_manager.h"
 
 #include <cstring>
 #include <fcntl.h>
 #include <filesystem>
+#include <gtest/gtest.h>
 #include <unistd.h>
 
 using namespace nyx;
@@ -12,8 +12,8 @@ namespace fs = std::filesystem;
 static const std::string TEST_FILE = "/tmp/nyxdb_dm_test.col";
 
 class DiskManagerTest : public ::testing::Test {
-protected:
-    void SetUp()    override { fs::remove(TEST_FILE); }
+  protected:
+    void SetUp() override { fs::remove(TEST_FILE); }
     void TearDown() override { fs::remove(TEST_FILE); }
 };
 
@@ -54,7 +54,7 @@ TEST_F(DiskManagerTest, ChecksumMismatchDetected) {
     blank.reset(id_res.value());
     dm.write_page(blank);
 
-    int fd = open(TEST_FILE.c_str(), O_RDWR);
+    int fd       = open(TEST_FILE.c_str(), O_RDWR);
     byte corrupt = 0xFF;
     pwrite(fd, &corrupt, 1, PAGE_HEADER_SIZE);
     close(fd);

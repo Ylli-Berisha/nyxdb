@@ -1,4 +1,5 @@
 #include "storage/disk_manager.h"
+
 #include "common/xxhash.h"
 
 #include <cerrno>
@@ -15,7 +16,7 @@ DiskManager::DiskManager(const std::string& path) : path_(path) {
     if (fd_ < 0)
         throw std::runtime_error("DiskManager: cannot open " + path + ": " + strerror(errno));
 
-    struct stat st{};
+    struct stat st {};
     fstat(fd_, &st);
     next_page_id_ = static_cast<u64>(st.st_size) / PAGE_SIZE;
 }
@@ -50,7 +51,7 @@ Result<void> DiskManager::write_page(const Page& page) {
     if (id == INVALID_PAGE_ID)
         return Result<void>::err("write_page: page has INVALID_PAGE_ID");
 
-    Page tmp = page;
+    Page tmp               = page;
     tmp.header()->page_id  = id;
     tmp.header()->checksum = xxhash64(tmp.payload(), PAGE_PAYLOAD_SIZE);
 
