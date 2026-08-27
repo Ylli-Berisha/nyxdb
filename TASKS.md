@@ -25,7 +25,7 @@
 - [x] `tests/unit/storage/disk_manager_test.cpp`
 
 ### Entry Point
-- [ ] `src/main.cpp` — parse config, init logger, placeholder server start
+- [x] `src/main.cpp` — parse config, init logger, placeholder server start
 
 ### Exit Criteria
 - [x] `cmake --build` clean, all tests pass
@@ -35,12 +35,30 @@
 
 ## Phase 2 — Storage Engine
 
-### Buffer Pool Manager
-- [ ] `src/storage/replacer.h` — `Replacer` interface
-- [ ] `src/storage/lru_k_replacer.h` + `.cpp` — LRU-K eviction
-- [ ] `src/storage/buffer_pool.h` + `.cpp` — frame pool, fetch/new/unpin/flush
+### Buffer Pool Manager — Dual-Pool Design (fresh + dirty, pointer shuffle)
+
+**Layer 1 — Two-pool structure (synchronous)**
+- [x] `src/storage/replacer.h` — `Replacer` interface
+- [ ] `src/storage/lru_k_replacer.h` + `.cpp` — LRU-K eviction (for fresh pool)
+- [ ] `src/storage/buffer_pool.h` + `.cpp` — dual-pool (fresh + dirty), pointer shuffle on dirty, synchronous flush when dirty pool full
 - [ ] `tests/unit/storage/lru_k_replacer_test.cpp`
 - [ ] `tests/unit/storage/buffer_pool_test.cpp`
+
+**Layer 2 — Double-buffered dirty pool (memtable pattern)**
+- [ ] Split dirty pool into `active` + `immutable` halves
+- [ ] Swap on threshold, flush `immutable` while `active` accepts new dirties
+
+**Layer 3 — Background flush thread**
+- [ ] Watermarks (high/low) on dirty pool
+- [ ] Background writer thread, sort dirty pages by offset before flushing
+- [ ] Writers only block at critical watermark
+
+**Layer 4 — Bulk insert bypass**
+- [ ] Direct-append path for bulk inserts (write straight to new file, skip pool)
+
+### Lock Manager (IS / IX / S / X hierarchical)
+- [ ] `src/storage/lock_manager.h` + `.cpp` — table/page/row-level locks, deadlock detection
+- [ ] `tests/unit/storage/lock_manager_test.cpp`
 
 ### PAX Page Layout
 - [ ] `src/storage/pax_page.h` + `.cpp` — column stripes, null bitmaps, row insert/scan
