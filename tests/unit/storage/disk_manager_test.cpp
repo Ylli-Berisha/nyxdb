@@ -54,7 +54,7 @@ TEST_F(DiskManagerTest, ChecksumMismatchDetected) {
     blank.reset(id_res.value());
     dm.write_page(blank);
 
-    int fd       = open(TEST_FILE.c_str(), O_RDWR);
+    int fd = open(TEST_FILE.c_str(), O_RDWR);
     byte corrupt = 0xFF;
     pwrite(fd, &corrupt, 1, PAGE_HEADER_SIZE);
     close(fd);

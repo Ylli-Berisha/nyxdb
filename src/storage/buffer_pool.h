@@ -6,6 +6,7 @@
 #include "storage/page.h"
 #include "storage/replacer.h"
 
+#include <array>
 #include <memory>
 #include <mutex>
 #include <queue>
@@ -19,7 +20,7 @@ class BufferPool {
     BufferPool(usize fresh_capacity, usize dirty_capacity, DiskManager& disk, usize k = 2);
     ~BufferPool() = default;
 
-    BufferPool(const BufferPool&)            = delete;
+    BufferPool(const BufferPool&) = delete;
     BufferPool& operator=(const BufferPool&) = delete;
 
     Result<Page*> fetch_page(PageId id);
@@ -29,29 +30,38 @@ class BufferPool {
     Result<void> flush_all();
 
     usize fresh_capacity() const { return fresh_slots_.size(); }
-    usize dirty_capacity() const { return dirty_slots_.size(); }
+    usize dirty_capacity() const { return dirty_halves_[0].size() + dirty_halves_[1].size(); }
 
   private:
-    enum class PoolTag : u8 { FRESH, DIRTY };
+    enum class PoolTag : u8 { FRESH, DIRTY_A, DIRTY_B };
 
     struct FrameLocation {
         PoolTag pool;
         FrameId slot;
     };
 
+    static constexpr double DIRTY_WATERMARK_PCT = 0.75;
+
+    static u8 half_index(PoolTag t) { return (t == PoolTag::DIRTY_A) ? 0 : 1; }
+    static PoolTag dirty_tag(u8 half) { return (half == 0) ? PoolTag::DIRTY_A : PoolTag::DIRTY_B; }
+
     Result<FrameId> acquire_fresh_slot_locked();
-    Result<FrameId> migrate_to_dirty_locked(FrameId fresh_slot);
+    Result<FrameId> migrate_to_dirty_locked(FrameId fresh_slot, PoolTag& out_tag);
+    void rotate_dirty_pool_locked();
+    Result<void> flush_half_locked(u8 half);
     Result<void> flush_dirty_pool_locked();
 
     std::vector<std::unique_ptr<Page>> slab_;
     std::vector<Page*> fresh_slots_;
-    std::vector<Page*> dirty_slots_;
+    std::array<std::vector<Page*>, 2> dirty_halves_;
     std::queue<FrameId> fresh_free_;
-    std::queue<FrameId> dirty_free_;
+    std::array<std::queue<FrameId>, 2> dirty_free_;
     std::queue<Page*> page_free_;
     std::unordered_map<PageId, FrameLocation> page_table_;
     std::unique_ptr<Replacer> replacer_;
     DiskManager& disk_;
+    u8 active_half_ = 0;
+    usize watermark_low_free_ = 0;
     mutable std::mutex mu_;
 };
 

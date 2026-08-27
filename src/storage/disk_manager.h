@@ -13,7 +13,7 @@ class DiskManager {
     explicit DiskManager(const std::string& path);
     ~DiskManager();
 
-    DiskManager(const DiskManager&)            = delete;
+    DiskManager(const DiskManager&) = delete;
     DiskManager& operator=(const DiskManager&) = delete;
 
     Result<void> read_page(PageId id, Page& out);

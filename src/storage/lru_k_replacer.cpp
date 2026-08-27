@@ -9,12 +9,12 @@ bool LRUKReplacer::victim(FrameId& out) {
         return false;
 
     FrameId under_k_victim = 0;
-    u64 under_k_ts         = 0;
-    bool has_under_k       = false;
+    u64 under_k_ts = 0;
+    bool has_under_k = false;
 
     FrameId k_victim = 0;
-    u64 k_ts         = 0;
-    bool has_k       = false;
+    u64 k_ts = 0;
+    bool has_k = false;
 
     for (usize i = 0; i < frames_.size(); ++i) {
         const FrameData& f = frames_[i];
@@ -25,14 +25,14 @@ bool LRUKReplacer::victim(FrameId& out) {
         if (f.history.size() < k_) {
             if (!has_under_k || front < under_k_ts) {
                 under_k_victim = static_cast<FrameId>(i);
-                under_k_ts     = front;
-                has_under_k    = true;
+                under_k_ts = front;
+                has_under_k = true;
             }
         } else {
             if (!has_k || front < k_ts) {
                 k_victim = static_cast<FrameId>(i);
-                k_ts     = front;
-                has_k    = true;
+                k_ts = front;
+                has_k = true;
             }
         }
     }
@@ -64,7 +64,7 @@ void LRUKReplacer::unpin(FrameId id) {
 
 void LRUKReplacer::record_access(FrameId id) {
     FrameData& f = frames_[id];
-    f.tracked    = true;
+    f.tracked = true;
     f.history.push_back(++counter_);
     if (f.history.size() > k_)
         f.history.pop_front();
@@ -77,7 +77,7 @@ void LRUKReplacer::remove(FrameId id) {
     if (f.evictable)
         --evictable_count_;
     f.evictable = false;
-    f.tracked   = false;
+    f.tracked = false;
     f.history.clear();
 }
 

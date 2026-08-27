@@ -30,7 +30,7 @@ TEST(ResultTest, VoidErr) {
 }
 
 TEST(ResultTest, MoveSemantics) {
-    auto r          = Result<std::string>::ok("hello");
+    auto r = Result<std::string>::ok("hello");
     std::string val = std::move(r.value());
     EXPECT_EQ(val, "hello");
 }

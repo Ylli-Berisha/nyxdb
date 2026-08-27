@@ -2,12 +2,19 @@
 
 #include "storage/lru_k_replacer.h"
 
+#include <cmath>
+
 namespace nyx {
 
 BufferPool::BufferPool(usize fresh_capacity, usize dirty_capacity, DiskManager& disk, usize k)
-    : fresh_slots_(fresh_capacity, nullptr), dirty_slots_(dirty_capacity, nullptr), disk_(disk) {
+    : fresh_slots_(fresh_capacity, nullptr), disk_(disk) {
 
-    usize total = fresh_capacity + dirty_capacity;
+    usize half_a = (dirty_capacity + 1) / 2;
+    usize half_b = dirty_capacity / 2;
+    dirty_halves_[0].assign(half_a, nullptr);
+    dirty_halves_[1].assign(half_b, nullptr);
+
+    usize total = fresh_capacity + half_a + half_b;
     slab_.reserve(total);
     for (usize i = 0; i < total; ++i) {
         slab_.emplace_back(std::make_unique<Page>());
@@ -15,8 +22,14 @@ BufferPool::BufferPool(usize fresh_capacity, usize dirty_capacity, DiskManager& 
     }
     for (FrameId i = 0; i < fresh_capacity; ++i)
         fresh_free_.push(i);
-    for (FrameId i = 0; i < dirty_capacity; ++i)
-        dirty_free_.push(i);
+    for (FrameId i = 0; i < half_a; ++i)
+        dirty_free_[0].push(i);
+    for (FrameId i = 0; i < half_b; ++i)
+        dirty_free_[1].push(i);
+
+    usize active_size = dirty_halves_[active_half_].size();
+    usize high_water_cnt = static_cast<usize>(std::ceil(DIRTY_WATERMARK_PCT * active_size));
+    watermark_low_free_ = (active_size > high_water_cnt) ? (active_size - high_water_cnt) : 0;
 
     replacer_ = std::make_unique<LRUKReplacer>(fresh_capacity, k);
 }
@@ -40,27 +53,16 @@ Result<FrameId> BufferPool::acquire_fresh_slot_locked() {
     return Result<FrameId>::ok(victim);
 }
 
-Result<FrameId> BufferPool::migrate_to_dirty_locked(FrameId fresh_slot) {
-    if (dirty_free_.empty()) {
-        auto res = flush_dirty_pool_locked();
-        if (res.is_err())
-            return Result<FrameId>::err(res.error().message);
-        if (dirty_free_.empty())
-            return Result<FrameId>::err("migrate_to_dirty: dirty pool full and all pages pinned");
-    }
-
-    FrameId dirty_slot = dirty_free_.front();
-    dirty_free_.pop();
-    dirty_slots_[dirty_slot] = fresh_slots_[fresh_slot];
-    fresh_slots_[fresh_slot] = nullptr;
-    replacer_->remove(fresh_slot);
-    fresh_free_.push(fresh_slot);
-    return Result<FrameId>::ok(dirty_slot);
+void BufferPool::rotate_dirty_pool_locked() {
+    active_half_ = 1 - active_half_;
+    u8 immutable = 1 - active_half_;
+    (void)flush_half_locked(immutable);
 }
 
-Result<void> BufferPool::flush_dirty_pool_locked() {
-    for (usize i = 0; i < dirty_slots_.size(); ++i) {
-        Page* p = dirty_slots_[i];
+Result<void> BufferPool::flush_half_locked(u8 half) {
+    auto& slots = dirty_halves_[half];
+    for (usize i = 0; i < slots.size(); ++i) {
+        Page* p = slots[i];
         if (p == nullptr)
             continue;
         if (p->pin_count > 0)
@@ -71,12 +73,39 @@ Result<void> BufferPool::flush_dirty_pool_locked() {
             return res;
 
         page_table_.erase(p->page_id());
-        dirty_slots_[i] = nullptr;
+        slots[i] = nullptr;
         p->reset(INVALID_PAGE_ID);
         page_free_.push(p);
-        dirty_free_.push(static_cast<FrameId>(i));
+        dirty_free_[half].push(static_cast<FrameId>(i));
     }
     return Result<void>::ok();
+}
+
+Result<void> BufferPool::flush_dirty_pool_locked() {
+    auto res = flush_half_locked(0);
+    if (res.is_err())
+        return res;
+    return flush_half_locked(1);
+}
+
+Result<FrameId> BufferPool::migrate_to_dirty_locked(FrameId fresh_slot, PoolTag& out_tag) {
+    if (dirty_free_[active_half_].size() <= watermark_low_free_)
+        rotate_dirty_pool_locked();
+
+    if (dirty_free_[active_half_].empty())
+        return Result<FrameId>::err("migrate_to_dirty: both dirty halves full of pinned pages");
+
+    u8 half = active_half_;
+    FrameId d_slot = dirty_free_[half].front();
+    dirty_free_[half].pop();
+
+    dirty_halves_[half][d_slot] = fresh_slots_[fresh_slot];
+    fresh_slots_[fresh_slot] = nullptr;
+    replacer_->remove(fresh_slot);
+    fresh_free_.push(fresh_slot);
+
+    out_tag = dirty_tag(half);
+    return Result<FrameId>::ok(d_slot);
 }
 
 Result<Page*> BufferPool::fetch_page(PageId id) {
@@ -85,7 +114,8 @@ Result<Page*> BufferPool::fetch_page(PageId id) {
     auto it = page_table_.find(id);
     if (it != page_table_.end()) {
         FrameLocation loc = it->second;
-        Page* p = (loc.pool == PoolTag::FRESH) ? fresh_slots_[loc.slot] : dirty_slots_[loc.slot];
+        Page* p = (loc.pool == PoolTag::FRESH) ? fresh_slots_[loc.slot]
+                                               : dirty_halves_[half_index(loc.pool)][loc.slot];
         p->pin_count++;
         if (loc.pool == PoolTag::FRESH) {
             replacer_->record_access(loc.slot);
@@ -110,8 +140,8 @@ Result<Page*> BufferPool::fetch_page(PageId id) {
     }
 
     fresh_slots_[slot] = p;
-    p->pin_count       = 1;
-    page_table_[id]    = {PoolTag::FRESH, slot};
+    p->pin_count = 1;
+    page_table_[id] = {PoolTag::FRESH, slot};
     replacer_->record_access(slot);
     replacer_->pin(slot);
     return Result<Page*>::ok(p);
@@ -135,9 +165,9 @@ Result<Page*> BufferPool::new_page(PageId& out_id) {
     Page* p = page_free_.front();
     page_free_.pop();
     p->reset(id);
-    p->pin_count       = 1;
+    p->pin_count = 1;
     fresh_slots_[slot] = p;
-    page_table_[id]    = {PoolTag::FRESH, slot};
+    page_table_[id] = {PoolTag::FRESH, slot};
     replacer_->record_access(slot);
     replacer_->pin(slot);
 
@@ -153,7 +183,8 @@ Result<void> BufferPool::unpin_page(PageId id, bool dirty) {
         return Result<void>::err("unpin_page: page " + std::to_string(id) + " not in pool");
 
     FrameLocation loc = it->second;
-    Page* p = (loc.pool == PoolTag::FRESH) ? fresh_slots_[loc.slot] : dirty_slots_[loc.slot];
+    Page* p = (loc.pool == PoolTag::FRESH) ? fresh_slots_[loc.slot]
+                                           : dirty_halves_[half_index(loc.pool)][loc.slot];
 
     if (p->pin_count <= 0)
         return Result<void>::err("unpin_page: page " + std::to_string(id) + " not pinned");
@@ -161,10 +192,11 @@ Result<void> BufferPool::unpin_page(PageId id, bool dirty) {
     p->pin_count--;
 
     if (dirty && loc.pool == PoolTag::FRESH) {
-        auto mig_res = migrate_to_dirty_locked(loc.slot);
+        PoolTag new_tag;
+        auto mig_res = migrate_to_dirty_locked(loc.slot, new_tag);
         if (mig_res.is_err())
             return Result<void>::err(mig_res.error().message);
-        page_table_[id] = {PoolTag::DIRTY, mig_res.value()};
+        page_table_[id] = {new_tag, mig_res.value()};
         return Result<void>::ok();
     }
 
@@ -182,19 +214,20 @@ Result<void> BufferPool::flush_page(PageId id) {
         return Result<void>::err("flush_page: page " + std::to_string(id) + " not in pool");
 
     FrameLocation loc = it->second;
-    if (loc.pool != PoolTag::DIRTY)
+    if (loc.pool == PoolTag::FRESH)
         return Result<void>::ok();
 
-    Page* p  = dirty_slots_[loc.slot];
+    u8 half = half_index(loc.pool);
+    Page* p = dirty_halves_[half][loc.slot];
     auto res = disk_.write_page(*p);
     if (res.is_err())
         return res;
 
     page_table_.erase(id);
-    dirty_slots_[loc.slot] = nullptr;
+    dirty_halves_[half][loc.slot] = nullptr;
     p->reset(INVALID_PAGE_ID);
     page_free_.push(p);
-    dirty_free_.push(loc.slot);
+    dirty_free_[half].push(loc.slot);
     return Result<void>::ok();
 }
 

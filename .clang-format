@@ -9,9 +9,7 @@ AllowShortIfStatementsOnASingleLine: Never
 AllowShortLoopsOnASingleLine: false
 
 AlignConsecutiveAssignments:
-  Enabled: true
-  AcrossEmptyLines: false
-  AcrossComments: false
+  Enabled: false
 
 AlignConsecutiveDeclarations:
   Enabled: false

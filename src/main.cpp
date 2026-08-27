@@ -4,8 +4,8 @@
 #include <string>
 
 struct Config {
-    uint16_t port         = 1404;
-    std::string data_dir  = "./data";
+    uint16_t port = 1404;
+    std::string data_dir = "./data";
     std::string log_level = "info";
 };
 

@@ -51,8 +51,8 @@ Result<void> DiskManager::write_page(const Page& page) {
     if (id == INVALID_PAGE_ID)
         return Result<void>::err("write_page: page has INVALID_PAGE_ID");
 
-    Page tmp               = page;
-    tmp.header()->page_id  = id;
+    Page tmp = page;
+    tmp.header()->page_id = id;
     tmp.header()->checksum = xxhash64(tmp.payload(), PAGE_PAYLOAD_SIZE);
 
     ssize_t n = pwrite(fd_, tmp.data, PAGE_SIZE, offset(id));

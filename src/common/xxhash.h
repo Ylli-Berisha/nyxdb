@@ -46,16 +46,16 @@ inline u64 xxh_merge_round(u64 acc, u64 val) {
 } // namespace detail
 
 inline u64 xxhash64(const byte* data, usize len, u64 seed = 0) {
-    const byte* p   = data;
+    const byte* p = data;
     const byte* end = data + len;
     u64 h64;
 
     if (len >= 32) {
         const byte* limit = end - 32;
-        u64 v1            = seed + detail::XXH_PRIME1 + detail::XXH_PRIME2;
-        u64 v2            = seed + detail::XXH_PRIME2;
-        u64 v3            = seed;
-        u64 v4            = seed - detail::XXH_PRIME1;
+        u64 v1 = seed + detail::XXH_PRIME1 + detail::XXH_PRIME2;
+        u64 v2 = seed + detail::XXH_PRIME2;
+        u64 v3 = seed;
+        u64 v4 = seed - detail::XXH_PRIME1;
 
         do {
             v1 = detail::xxh_round(v1, detail::read64(p));

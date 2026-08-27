@@ -12,7 +12,7 @@ class LRUKReplacer : public Replacer {
     LRUKReplacer(usize num_frames, usize k);
     ~LRUKReplacer() override = default;
 
-    LRUKReplacer(const LRUKReplacer&)            = delete;
+    LRUKReplacer(const LRUKReplacer&) = delete;
     LRUKReplacer& operator=(const LRUKReplacer&) = delete;
 
     bool victim(FrameId& out) override;
@@ -26,11 +26,11 @@ class LRUKReplacer : public Replacer {
     struct FrameData {
         std::list<u64> history;
         bool evictable = false;
-        bool tracked   = false;
+        bool tracked = false;
     };
 
     usize k_;
-    u64 counter_           = 0;
+    u64 counter_ = 0;
     usize evictable_count_ = 0;
     std::vector<FrameData> frames_;
 };

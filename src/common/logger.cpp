@@ -5,7 +5,7 @@
 namespace nyx {
 
 void init_logger(std::string_view level) {
-    auto sink   = std::make_shared<spdlog::sinks::stdout_color_sink_mt>();
+    auto sink = std::make_shared<spdlog::sinks::stdout_color_sink_mt>();
     auto logger = std::make_shared<spdlog::logger>("nyx", sink);
 
     logger->set_pattern("[%H:%M:%S.%e] [%^%l%$] %v");
