@@ -2,7 +2,7 @@
 
 #include "common/result.h"
 #include "common/types.h"
-#include "storage/page.h"
+#include "storage/disk/page.h"
 
 #include <string>
 

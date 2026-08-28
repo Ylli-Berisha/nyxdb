@@ -1,10 +1,10 @@
 add_library(nyxdb_core STATIC
     common/logger.cpp
-    storage/disk_manager.cpp
-    storage/lru_k_replacer.cpp
-    storage/buffer_pool.cpp
-    storage/column_page.cpp
-    storage/column_file.cpp
+    storage/disk/disk_manager.cpp
+    storage/disk/column_page.cpp
+    storage/disk/column_file.cpp
+    storage/memory/lru_k_replacer.cpp
+    storage/memory/buffer_pool.cpp
 )
 
 target_include_directories(nyxdb_core PUBLIC ${CMAKE_SOURCE_DIR}/src)

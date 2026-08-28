@@ -1,4 +1,4 @@
-#include "storage/column_page.h"
+#include "storage/disk/column_page.h"
 
 #include <cstring>
 

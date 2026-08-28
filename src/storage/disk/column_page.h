@@ -2,8 +2,8 @@
 
 #include "common/result.h"
 #include "common/types.h"
-#include "storage/page.h"
-#include "storage/type_id.h"
+#include "storage/disk/page.h"
+#include "storage/disk/type_id.h"
 
 namespace nyx {
 

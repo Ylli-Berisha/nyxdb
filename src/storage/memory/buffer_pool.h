@@ -2,9 +2,9 @@
 
 #include "common/result.h"
 #include "common/types.h"
-#include "storage/disk_manager.h"
-#include "storage/page.h"
-#include "storage/replacer.h"
+#include "storage/disk/disk_manager.h"
+#include "storage/disk/page.h"
+#include "storage/memory/replacer.h"
 
 #include <array>
 #include <condition_variable>

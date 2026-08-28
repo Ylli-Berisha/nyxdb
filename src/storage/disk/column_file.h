@@ -2,10 +2,10 @@
 
 #include "common/result.h"
 #include "common/types.h"
-#include "storage/column_page.h"
-#include "storage/disk_manager.h"
-#include "storage/page.h"
-#include "storage/type_id.h"
+#include "storage/disk/column_page.h"
+#include "storage/disk/disk_manager.h"
+#include "storage/disk/page.h"
+#include "storage/disk/type_id.h"
 
 #include <functional>
 #include <string>

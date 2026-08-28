@@ -1,4 +1,4 @@
-#include "storage/column_file.h"
+#include "storage/disk/column_file.h"
 
 #include <stdexcept>
 #include <utility>

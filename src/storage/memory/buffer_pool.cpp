@@ -1,6 +1,6 @@
-#include "storage/buffer_pool.h"
+#include "storage/memory/buffer_pool.h"
 
-#include "storage/lru_k_replacer.h"
+#include "storage/memory/lru_k_replacer.h"
 
 #include <cmath>
 
