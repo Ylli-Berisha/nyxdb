@@ -7,9 +7,11 @@
 #include "storage/replacer.h"
 
 #include <array>
+#include <condition_variable>
 #include <memory>
 #include <mutex>
 #include <queue>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 
@@ -18,7 +20,7 @@ namespace nyx {
 class BufferPool {
   public:
     BufferPool(usize fresh_capacity, usize dirty_capacity, DiskManager& disk, usize k = 2);
-    ~BufferPool() = default;
+    ~BufferPool();
 
     BufferPool(const BufferPool&) = delete;
     BufferPool& operator=(const BufferPool&) = delete;
@@ -34,6 +36,7 @@ class BufferPool {
 
   private:
     enum class PoolTag : u8 { FRESH, DIRTY_A, DIRTY_B };
+    enum class FlushState : u8 { IDLE, FLUSHING };
 
     struct FrameLocation {
         PoolTag pool;
@@ -46,10 +49,12 @@ class BufferPool {
     static PoolTag dirty_tag(u8 half) { return (half == 0) ? PoolTag::DIRTY_A : PoolTag::DIRTY_B; }
 
     Result<FrameId> acquire_fresh_slot_locked();
-    Result<FrameId> migrate_to_dirty_locked(FrameId fresh_slot, PoolTag& out_tag);
+    Result<FrameId> migrate_to_dirty_locked(std::unique_lock<std::mutex>& lock, FrameId fresh_slot,
+                                            PoolTag& out_tag);
     void rotate_dirty_pool_locked();
     Result<void> flush_half_locked(u8 half);
     Result<void> flush_dirty_pool_locked();
+    void bg_worker();
 
     std::vector<std::unique_ptr<Page>> slab_;
     std::vector<Page*> fresh_slots_;
@@ -62,7 +67,11 @@ class BufferPool {
     DiskManager& disk_;
     u8 active_half_ = 0;
     usize watermark_low_free_ = 0;
+    FlushState flush_state_ = FlushState::IDLE;
+    bool bg_stop_ = false;
     mutable std::mutex mu_;
+    std::condition_variable cv_;
+    std::thread bg_thread_;
 };
 
 } // namespace nyx

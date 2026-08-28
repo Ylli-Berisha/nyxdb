@@ -32,6 +32,34 @@ BufferPool::BufferPool(usize fresh_capacity, usize dirty_capacity, DiskManager& 
     watermark_low_free_ = (active_size > high_water_cnt) ? (active_size - high_water_cnt) : 0;
 
     replacer_ = std::make_unique<LRUKReplacer>(fresh_capacity, k);
+
+    bg_thread_ = std::thread(&BufferPool::bg_worker, this);
+}
+
+BufferPool::~BufferPool() {
+    {
+        std::lock_guard<std::mutex> lock(mu_);
+        bg_stop_ = true;
+    }
+    cv_.notify_all();
+    if (bg_thread_.joinable())
+        bg_thread_.join();
+}
+
+void BufferPool::bg_worker() {
+    while (true) {
+        std::unique_lock<std::mutex> lock(mu_);
+        cv_.wait(lock, [this] { return bg_stop_ || flush_state_ == FlushState::FLUSHING; });
+        if (bg_stop_)
+            return;
+
+        u8 immutable = 1 - active_half_;
+        (void)flush_half_locked(immutable);
+
+        flush_state_ = FlushState::IDLE;
+        lock.unlock();
+        cv_.notify_all();
+    }
 }
 
 Result<FrameId> BufferPool::acquire_fresh_slot_locked() {
@@ -55,8 +83,8 @@ Result<FrameId> BufferPool::acquire_fresh_slot_locked() {
 
 void BufferPool::rotate_dirty_pool_locked() {
     active_half_ = 1 - active_half_;
-    u8 immutable = 1 - active_half_;
-    (void)flush_half_locked(immutable);
+    flush_state_ = FlushState::FLUSHING;
+    cv_.notify_one();
 }
 
 Result<void> BufferPool::flush_half_locked(u8 half) {
@@ -88,8 +116,12 @@ Result<void> BufferPool::flush_dirty_pool_locked() {
     return flush_half_locked(1);
 }
 
-Result<FrameId> BufferPool::migrate_to_dirty_locked(FrameId fresh_slot, PoolTag& out_tag) {
-    if (dirty_free_[active_half_].size() <= watermark_low_free_)
+Result<FrameId> BufferPool::migrate_to_dirty_locked(std::unique_lock<std::mutex>& lock,
+                                                    FrameId fresh_slot, PoolTag& out_tag) {
+    while (dirty_free_[active_half_].empty() && flush_state_ == FlushState::FLUSHING)
+        cv_.wait(lock);
+
+    if (flush_state_ == FlushState::IDLE && dirty_free_[active_half_].size() <= watermark_low_free_)
         rotate_dirty_pool_locked();
 
     if (dirty_free_[active_half_].empty())
@@ -109,7 +141,7 @@ Result<FrameId> BufferPool::migrate_to_dirty_locked(FrameId fresh_slot, PoolTag&
 }
 
 Result<Page*> BufferPool::fetch_page(PageId id) {
-    std::lock_guard<std::mutex> lock(mu_);
+    std::unique_lock<std::mutex> lock(mu_);
 
     auto it = page_table_.find(id);
     if (it != page_table_.end()) {
@@ -148,7 +180,7 @@ Result<Page*> BufferPool::fetch_page(PageId id) {
 }
 
 Result<Page*> BufferPool::new_page(PageId& out_id) {
-    std::lock_guard<std::mutex> lock(mu_);
+    std::unique_lock<std::mutex> lock(mu_);
 
     auto slot_res = acquire_fresh_slot_locked();
     if (slot_res.is_err())
@@ -176,7 +208,7 @@ Result<Page*> BufferPool::new_page(PageId& out_id) {
 }
 
 Result<void> BufferPool::unpin_page(PageId id, bool dirty) {
-    std::lock_guard<std::mutex> lock(mu_);
+    std::unique_lock<std::mutex> lock(mu_);
 
     auto it = page_table_.find(id);
     if (it == page_table_.end())
@@ -193,7 +225,7 @@ Result<void> BufferPool::unpin_page(PageId id, bool dirty) {
 
     if (dirty && loc.pool == PoolTag::FRESH) {
         PoolTag new_tag;
-        auto mig_res = migrate_to_dirty_locked(loc.slot, new_tag);
+        auto mig_res = migrate_to_dirty_locked(lock, loc.slot, new_tag);
         if (mig_res.is_err())
             return Result<void>::err(mig_res.error().message);
         page_table_[id] = {new_tag, mig_res.value()};
@@ -232,8 +264,9 @@ Result<void> BufferPool::flush_page(PageId id) {
 }
 
 Result<void> BufferPool::flush_all() {
-    std::lock_guard<std::mutex> lock(mu_);
-    return flush_dirty_pool_locked();
+    std::unique_lock<std::mutex> lock(mu_);
+    cv_.wait(lock, [this] { return flush_state_ == FlushState::IDLE; });
+    return flush_half_locked(active_half_);
 }
 
 } // namespace nyx
