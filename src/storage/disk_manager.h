@@ -16,6 +16,9 @@ class DiskManager {
     DiskManager(const DiskManager&) = delete;
     DiskManager& operator=(const DiskManager&) = delete;
 
+    DiskManager(DiskManager&& other) noexcept;
+    DiskManager& operator=(DiskManager&& other) noexcept;
+
     Result<void> read_page(PageId id, Page& out);
     Result<void> write_page(const Page& page);
     Result<PageId> allocate_page();

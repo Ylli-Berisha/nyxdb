@@ -26,6 +26,25 @@ DiskManager::~DiskManager() {
         close(fd_);
 }
 
+DiskManager::DiskManager(DiskManager&& other) noexcept
+    : fd_(other.fd_), next_page_id_(other.next_page_id_), path_(std::move(other.path_)) {
+    other.fd_ = -1;
+    other.next_page_id_ = 0;
+}
+
+DiskManager& DiskManager::operator=(DiskManager&& other) noexcept {
+    if (this != &other) {
+        if (fd_ >= 0)
+            close(fd_);
+        fd_ = other.fd_;
+        next_page_id_ = other.next_page_id_;
+        path_ = std::move(other.path_);
+        other.fd_ = -1;
+        other.next_page_id_ = 0;
+    }
+    return *this;
+}
+
 Result<void> DiskManager::read_page(PageId id, Page& out) {
     if (id >= next_page_id_)
         return Result<void>::err("read_page: page " + std::to_string(id) + " out of range");
