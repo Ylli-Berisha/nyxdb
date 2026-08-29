@@ -3,6 +3,8 @@ add_library(nyxdb_core STATIC
     storage/disk/disk_manager.cpp
     storage/disk/column_page.cpp
     storage/disk/column_file.cpp
+    storage/disk/schema.cpp
+    storage/disk/table.cpp
     storage/memory/lru_k_replacer.cpp
     storage/memory/buffer_pool.cpp
 )
