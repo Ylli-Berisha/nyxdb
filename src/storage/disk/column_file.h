@@ -6,9 +6,11 @@
 #include "storage/disk/disk_manager.h"
 #include "storage/disk/page.h"
 #include "storage/disk/type_id.h"
+#include "storage/disk/value.h"
 
 #include <functional>
 #include <string>
+#include <vector>
 
 namespace nyx {
 
@@ -33,6 +35,8 @@ class ColumnFile {
     Result<void> append_i64(i64 v);
     Result<void> append_f64(f64 v);
     Result<void> append_null();
+
+    Result<void> append_bulk(const std::vector<Value>& values);
 
     Result<i32> get_i32(u64 row_id);
     Result<i64> get_i64(u64 row_id);

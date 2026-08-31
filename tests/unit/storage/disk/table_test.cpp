@@ -140,3 +140,88 @@ TEST_F(TableTest, DuplicateColumnNameRejected) {
     auto res = Table::create(TEST_ROOT, "bad", bad);
     EXPECT_TRUE(res.is_err());
 }
+
+TEST_F(TableTest, InsertManyBasic) {
+    auto res = Table::create(TEST_ROOT, "users", three_col_schema());
+    ASSERT_TRUE(res.is_ok());
+    auto t = std::move(res.value());
+
+    std::vector<std::vector<Value>> rows;
+    for (i64 i = 0; i < 100; ++i)
+        rows.push_back({static_cast<i64>(i), static_cast<f64>(i) * 0.5, static_cast<i32>(i % 7)});
+
+    auto ins = t.insert_many(rows);
+    ASSERT_TRUE(ins.is_ok());
+    EXPECT_EQ(ins.value(), 0u);
+    EXPECT_EQ(t.row_count(), 100u);
+
+    for (u64 i = 0; i < 100; ++i) {
+        EXPECT_EQ(t.column(0).get_i64(i).value(), static_cast<i64>(i));
+        EXPECT_DOUBLE_EQ(t.column(1).get_f64(i).value(), static_cast<f64>(i) * 0.5);
+        EXPECT_EQ(t.column(2).get_i32(i).value(), static_cast<i32>(i % 7));
+    }
+}
+
+TEST_F(TableTest, InsertManyPersistence) {
+    {
+        auto res = Table::create(TEST_ROOT, "users", three_col_schema());
+        ASSERT_TRUE(res.is_ok());
+        auto t = std::move(res.value());
+
+        std::vector<std::vector<Value>> rows;
+        for (i64 i = 0; i < 200; ++i)
+            rows.push_back(
+                {static_cast<i64>(i * 3), static_cast<f64>(i) + 0.25, static_cast<i32>(-i)});
+
+        ASSERT_TRUE(t.insert_many(rows).is_ok());
+        ASSERT_TRUE(t.flush().is_ok());
+        ASSERT_TRUE(t.fsync().is_ok());
+    }
+
+    auto res = Table::open(TEST_ROOT, "users");
+    ASSERT_TRUE(res.is_ok());
+    auto t = std::move(res.value());
+    EXPECT_EQ(t.row_count(), 200u);
+    for (u64 i = 0; i < 200; ++i) {
+        EXPECT_EQ(t.column(0).get_i64(i).value(), static_cast<i64>(i * 3));
+        EXPECT_DOUBLE_EQ(t.column(1).get_f64(i).value(), static_cast<f64>(i) + 0.25);
+        EXPECT_EQ(t.column(2).get_i32(i).value(), static_cast<i32>(-i));
+    }
+}
+
+TEST_F(TableTest, InsertManyRowSizeMismatchErrors) {
+    auto res = Table::create(TEST_ROOT, "users", three_col_schema());
+    ASSERT_TRUE(res.is_ok());
+    auto t = std::move(res.value());
+
+    std::vector<std::vector<Value>> rows = {
+        {static_cast<i64>(1), static_cast<f64>(2.0), static_cast<i32>(3)}, // ok
+        {static_cast<i64>(4), static_cast<f64>(5.0)}, // too short
+    };
+    EXPECT_TRUE(t.insert_many(rows).is_err());
+    EXPECT_EQ(t.row_count(), 0u); // structural check runs before any writes
+}
+
+TEST_F(TableTest, InsertManyTypeMismatchErrors) {
+    auto res = Table::create(TEST_ROOT, "users", three_col_schema());
+    ASSERT_TRUE(res.is_ok());
+    auto t = std::move(res.value());
+
+    std::vector<std::vector<Value>> rows = {
+        {static_cast<i64>(1), static_cast<f64>(2.0), static_cast<i32>(3)},
+        {static_cast<i32>(4), static_cast<f64>(5.0), static_cast<i32>(6)}, // id wrong type
+    };
+    EXPECT_TRUE(t.insert_many(rows).is_err());
+}
+
+TEST_F(TableTest, InsertManyEmpty) {
+    auto res = Table::create(TEST_ROOT, "users", three_col_schema());
+    ASSERT_TRUE(res.is_ok());
+    auto t = std::move(res.value());
+
+    std::vector<std::vector<Value>> rows;
+    auto ins = t.insert_many(rows);
+    ASSERT_TRUE(ins.is_ok());
+    EXPECT_EQ(ins.value(), 0u);
+    EXPECT_EQ(t.row_count(), 0u);
+}

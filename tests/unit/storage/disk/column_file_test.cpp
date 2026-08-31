@@ -144,3 +144,91 @@ TEST_F(ColumnFileTest, TypeMismatchOnAppendErrors) {
     EXPECT_TRUE(cf.append_i32(5).is_err());
     EXPECT_TRUE(cf.append_f64(5.0).is_err());
 }
+
+TEST_F(ColumnFileTest, AppendBulkAcrossPages) {
+    auto res = ColumnFile::create(TEST_FILE, TypeId::INT64, false);
+    ASSERT_TRUE(res.is_ok());
+    auto cf = std::move(res.value());
+
+    u16 cap = cf.page_capacity();
+    u64 total = cap * 2 + 3;
+
+    std::vector<Value> batch;
+    batch.reserve(total);
+    for (u64 i = 0; i < total; ++i)
+        batch.emplace_back(static_cast<i64>(i * 7));
+
+    ASSERT_TRUE(cf.append_bulk(batch).is_ok());
+    EXPECT_EQ(cf.row_count(), total);
+    EXPECT_EQ(cf.get_i64(0).value(), 0);
+    EXPECT_EQ(cf.get_i64(cap - 1).value(), static_cast<i64>((cap - 1) * 7));
+    EXPECT_EQ(cf.get_i64(cap).value(), static_cast<i64>(cap * 7));
+    EXPECT_EQ(cf.get_i64(total - 1).value(), static_cast<i64>((total - 1) * 7));
+}
+
+TEST_F(ColumnFileTest, AppendBulkWithNulls) {
+    auto res = ColumnFile::create(TEST_FILE, TypeId::INT64, true);
+    ASSERT_TRUE(res.is_ok());
+    auto cf = std::move(res.value());
+
+    std::vector<Value> batch;
+    for (i64 i = 0; i < 20; ++i) {
+        if (i % 2 == 0)
+            batch.emplace_back(i);
+        else
+            batch.emplace_back(std::monostate{});
+    }
+
+    ASSERT_TRUE(cf.append_bulk(batch).is_ok());
+    EXPECT_EQ(cf.row_count(), 20u);
+    for (u64 i = 0; i < 20; ++i) {
+        if (i % 2 == 0) {
+            EXPECT_FALSE(cf.is_null(i));
+            EXPECT_EQ(cf.get_i64(i).value(), static_cast<i64>(i));
+        } else {
+            EXPECT_TRUE(cf.is_null(i));
+        }
+    }
+}
+
+TEST_F(ColumnFileTest, AppendBulkTypeMismatchErrors) {
+    auto res = ColumnFile::create(TEST_FILE, TypeId::INT64, false);
+    ASSERT_TRUE(res.is_ok());
+    auto cf = std::move(res.value());
+
+    std::vector<Value> batch = {static_cast<i64>(1), static_cast<i32>(2), static_cast<i64>(3)};
+    EXPECT_TRUE(cf.append_bulk(batch).is_err());
+}
+
+TEST_F(ColumnFileTest, AppendBulkEmpty) {
+    auto res = ColumnFile::create(TEST_FILE, TypeId::INT64, false);
+    ASSERT_TRUE(res.is_ok());
+    auto cf = std::move(res.value());
+
+    std::vector<Value> batch;
+    ASSERT_TRUE(cf.append_bulk(batch).is_ok());
+    EXPECT_EQ(cf.row_count(), 0u);
+}
+
+TEST_F(ColumnFileTest, RotateDoesNotDoubleWrite) {
+    // Insert enough values to force at least one rotation, then verify all
+    // pages round-trip through DiskManager. Regression guard: if rotate's
+    // reserve_page_id caused a hole, this fails on reopen.
+    {
+        auto res = ColumnFile::create(TEST_FILE, TypeId::INT64, false);
+        ASSERT_TRUE(res.is_ok());
+        auto cf = std::move(res.value());
+
+        u64 total = cf.page_capacity() * 3 + 5;
+        for (u64 i = 0; i < total; ++i)
+            ASSERT_TRUE(cf.append_i64(static_cast<i64>(i)).is_ok());
+        ASSERT_TRUE(cf.flush().is_ok());
+        ASSERT_TRUE(cf.fsync().is_ok());
+    }
+
+    auto reopen = ColumnFile::open(TEST_FILE);
+    ASSERT_TRUE(reopen.is_ok());
+    auto cf = std::move(reopen.value());
+    for (u64 i = 0; i < cf.row_count(); ++i)
+        EXPECT_EQ(cf.get_i64(i).value(), static_cast<i64>(i));
+}

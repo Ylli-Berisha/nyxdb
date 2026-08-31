@@ -77,13 +77,10 @@ Result<void> ColumnFile::rotate_page() {
         current_dirty_ = false;
     }
 
-    auto id_res = disk_.allocate_page();
-    if (id_res.is_err())
-        return Result<void>::err(id_res.error().message);
-
-    current_page_.reset(id_res.value());
+    PageId new_id = disk_.reserve_page_id();
+    current_page_.reset(new_id);
     ColumnPage::init(current_page_, type_, nullable_);
-    current_page_id_ = id_res.value();
+    current_page_id_ = new_id;
     current_dirty_ = true;
     return Result<void>::ok();
 }
@@ -140,6 +137,34 @@ Result<void> ColumnFile::append_null() {
     if (res.is_err())
         return res;
     current_dirty_ = true;
+    return Result<void>::ok();
+}
+
+Result<void> ColumnFile::append_bulk(const std::vector<Value>& values) {
+    for (const auto& v : values) {
+        auto rr = ensure_room_for_append();
+        if (rr.is_err())
+            return rr;
+
+        ColumnPage view(current_page_);
+        Result<void> ar = Result<void>::ok();
+
+        if (nyx::is_null(v)) {
+            ar = view.append_null();
+        } else if (type_ == TypeId::INT32 && std::holds_alternative<i32>(v)) {
+            ar = view.append_i32(std::get<i32>(v));
+        } else if (type_ == TypeId::INT64 && std::holds_alternative<i64>(v)) {
+            ar = view.append_i64(std::get<i64>(v));
+        } else if (type_ == TypeId::DOUBLE && std::holds_alternative<f64>(v)) {
+            ar = view.append_f64(std::get<f64>(v));
+        } else {
+            return Result<void>::err("append_bulk: value type does not match column type");
+        }
+
+        if (ar.is_err())
+            return ar;
+        current_dirty_ = true;
+    }
     return Result<void>::ok();
 }
 

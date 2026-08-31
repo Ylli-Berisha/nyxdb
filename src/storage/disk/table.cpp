@@ -140,6 +140,36 @@ Result<u64> Table::insert(const std::vector<Value>& row) {
     return Result<u64>::ok(row_id);
 }
 
+Result<u64> Table::insert_many(const std::vector<std::vector<Value>>& rows) {
+    if (rows.empty())
+        return Result<u64>::ok(row_count());
+
+    for (const auto& row : rows) {
+        if (row.size() != columns_.size())
+            return Result<u64>::err("insert_many: row size " + std::to_string(row.size()) +
+                                    " does not match column count " +
+                                    std::to_string(columns_.size()));
+    }
+
+    u64 starting_row_id = row_count();
+
+    std::vector<std::vector<Value>> column_batches(columns_.size());
+    for (auto& b : column_batches)
+        b.reserve(rows.size());
+    for (const auto& row : rows)
+        for (size_t i = 0; i < row.size(); ++i)
+            column_batches[i].push_back(row[i]);
+
+    for (size_t i = 0; i < columns_.size(); ++i) {
+        auto r = columns_[i].append_bulk(column_batches[i]);
+        if (r.is_err())
+            return Result<u64>::err("insert_many col " + schema_[i].name + ": " +
+                                    r.error().message);
+    }
+
+    return Result<u64>::ok(starting_row_id);
+}
+
 Result<void> Table::flush() {
     for (auto& col : columns_) {
         auto r = col.flush();

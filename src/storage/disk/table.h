@@ -33,6 +33,7 @@ class Table {
     const ColumnFile& column(size_t idx) const { return columns_[idx]; }
 
     Result<u64> insert(const std::vector<Value>& row);
+    Result<u64> insert_many(const std::vector<std::vector<Value>>& rows);
 
     Result<void> flush();
     Result<void> fsync();

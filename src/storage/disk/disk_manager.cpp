@@ -93,6 +93,10 @@ Result<PageId> DiskManager::allocate_page() {
     return Result<PageId>::ok(id);
 }
 
+PageId DiskManager::reserve_page_id() {
+    return next_page_id_++;
+}
+
 Result<void> DiskManager::fsync() {
     if (::fsync(fd_) != 0)
         return Result<void>::err("fsync failed: " + std::string(strerror(errno)));
