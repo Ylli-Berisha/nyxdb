@@ -5,6 +5,8 @@
 #include "storage/disk/page.h"
 #include "storage/disk/type_id.h"
 
+#include <optional>
+
 namespace nyx {
 
 #pragma pack(push, 1)
@@ -16,11 +18,13 @@ struct ColumnPageHeader {
     u16 null_bitmap_bytes;
     u8 min_bytes[8];
     u8 max_bytes[8];
-    u8 reserved[8];
+    u16 null_count;
+    u8 reserved[6];
 };
 #pragma pack(pop)
 
 static constexpr u8 COL_PAGE_FLAG_NULLABLE = 0x01;
+static constexpr u8 COL_PAGE_FLAG_HAS_NULLS = 0x02;
 static constexpr usize COL_PAGE_HEADER_SIZE = 32;
 
 static_assert(sizeof(ColumnPageHeader) == COL_PAGE_HEADER_SIZE,
@@ -54,6 +58,16 @@ class ColumnPage {
     Result<i64> get_i64(u16 slot) const;
     Result<f64> get_f64(u16 slot) const;
     bool is_null(u16 slot) const;
+
+    std::optional<i32> min_i32() const;
+    std::optional<i32> max_i32() const;
+    std::optional<i64> min_i64() const;
+    std::optional<i64> max_i64() const;
+    std::optional<f64> min_f64() const;
+    std::optional<f64> max_f64() const;
+
+    u16 null_count() const;
+    bool has_nulls() const;
 
   private:
     Page& page_;

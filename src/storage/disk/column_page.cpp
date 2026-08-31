@@ -11,6 +11,7 @@ void ColumnPage::init(Page& page, TypeId type, bool nullable) {
     h->value_count = 0;
     h->capacity = static_cast<u16>(column_page_capacity(type, nullable));
     h->null_bitmap_bytes = nullable ? static_cast<u16>((h->capacity + 7) / 8) : 0;
+    h->null_count = 0;
     std::memset(h->min_bytes, 0, sizeof(h->min_bytes));
     std::memset(h->max_bytes, 0, sizeof(h->max_bytes));
     std::memset(h->reserved, 0, sizeof(h->reserved));
@@ -69,12 +70,37 @@ bool ColumnPage::is_null(u16 slot) const {
     return (null_bitmap()[slot / 8] >> (slot % 8)) & 1u;
 }
 
+u16 ColumnPage::null_count() const {
+    return header()->null_count;
+}
+
+bool ColumnPage::has_nulls() const {
+    return (header()->flags & COL_PAGE_FLAG_HAS_NULLS) != 0;
+}
+
 static void clear_null_bit(byte* bitmap, u16 slot) {
     bitmap[slot / 8] &= static_cast<byte>(~(1u << (slot % 8)));
 }
 
 static void set_null_bit(byte* bitmap, u16 slot) {
     bitmap[slot / 8] |= static_cast<byte>(1u << (slot % 8));
+}
+
+template <typename T> static void update_min_max(ColumnPageHeader* h, T v) {
+    u16 non_null_count = h->value_count - h->null_count;
+    if (non_null_count == 0) {
+        std::memcpy(h->min_bytes, &v, sizeof(T));
+        std::memcpy(h->max_bytes, &v, sizeof(T));
+        return;
+    }
+
+    T cur_min, cur_max;
+    std::memcpy(&cur_min, h->min_bytes, sizeof(T));
+    std::memcpy(&cur_max, h->max_bytes, sizeof(T));
+    if (v < cur_min)
+        std::memcpy(h->min_bytes, &v, sizeof(T));
+    if (cur_max < v)
+        std::memcpy(h->max_bytes, &v, sizeof(T));
 }
 
 template <typename T>
@@ -86,6 +112,7 @@ static Result<void> append_typed(ColumnPage& self, ColumnPageHeader* h, byte* va
         return Result<void>::err("append: page full");
 
     std::memcpy(values + h->value_count * sizeof(T), &v, sizeof(T));
+    update_min_max<T>(h, v);
     if (h->null_bitmap_bytes > 0)
         clear_null_bit(bitmap, h->value_count);
     h->value_count++;
@@ -113,6 +140,8 @@ Result<void> ColumnPage::append_null() {
         return Result<void>::err("append_null: page full");
 
     set_null_bit(null_bitmap(), h->value_count);
+    h->null_count++;
+    h->flags |= COL_PAGE_FLAG_HAS_NULLS;
     h->value_count++;
     return Result<void>::ok();
 }
@@ -142,6 +171,45 @@ Result<i64> ColumnPage::get_i64(u16 slot) const {
 
 Result<f64> ColumnPage::get_f64(u16 slot) const {
     return get_typed<f64>(*this, header(), value_area(), TypeId::DOUBLE, slot);
+}
+
+template <typename T> static std::optional<T> read_min(const ColumnPageHeader* h, TypeId expected) {
+    if (h->type != expected)
+        return std::nullopt;
+    if (h->value_count - h->null_count == 0)
+        return std::nullopt;
+    T v;
+    std::memcpy(&v, h->min_bytes, sizeof(T));
+    return v;
+}
+
+template <typename T> static std::optional<T> read_max(const ColumnPageHeader* h, TypeId expected) {
+    if (h->type != expected)
+        return std::nullopt;
+    if (h->value_count - h->null_count == 0)
+        return std::nullopt;
+    T v;
+    std::memcpy(&v, h->max_bytes, sizeof(T));
+    return v;
+}
+
+std::optional<i32> ColumnPage::min_i32() const {
+    return read_min<i32>(header(), TypeId::INT32);
+}
+std::optional<i32> ColumnPage::max_i32() const {
+    return read_max<i32>(header(), TypeId::INT32);
+}
+std::optional<i64> ColumnPage::min_i64() const {
+    return read_min<i64>(header(), TypeId::INT64);
+}
+std::optional<i64> ColumnPage::max_i64() const {
+    return read_max<i64>(header(), TypeId::INT64);
+}
+std::optional<f64> ColumnPage::min_f64() const {
+    return read_min<f64>(header(), TypeId::DOUBLE);
+}
+std::optional<f64> ColumnPage::max_f64() const {
+    return read_max<f64>(header(), TypeId::DOUBLE);
 }
 
 } // namespace nyx

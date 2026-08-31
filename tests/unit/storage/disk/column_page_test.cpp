@@ -137,3 +137,112 @@ TEST(ColumnPageTest, IsFullAtCapacity) {
     EXPECT_TRUE(cp.is_full());
     EXPECT_TRUE(cp.append_i64(0).is_err());
 }
+
+TEST(ColumnPageTest, MinMaxUpdatesOnAppendInt64) {
+    Page p{};
+    p.reset(1);
+    ColumnPage::init(p, TypeId::INT64, false);
+    ColumnPage cp(p);
+
+    for (i64 v : {5, 3, 8, 1, 6})
+        ASSERT_TRUE(cp.append_i64(v).is_ok());
+
+    ASSERT_TRUE(cp.min_i64().has_value());
+    ASSERT_TRUE(cp.max_i64().has_value());
+    EXPECT_EQ(*cp.min_i64(), 1);
+    EXPECT_EQ(*cp.max_i64(), 8);
+}
+
+TEST(ColumnPageTest, MinMaxAcrossTypes) {
+    {
+        Page p{};
+        p.reset(1);
+        ColumnPage::init(p, TypeId::INT32, false);
+        ColumnPage cp(p);
+        for (i32 v : {5, 3, 8, 1, 6})
+            ASSERT_TRUE(cp.append_i32(v).is_ok());
+        EXPECT_EQ(*cp.min_i32(), 1);
+        EXPECT_EQ(*cp.max_i32(), 8);
+    }
+    {
+        Page p{};
+        p.reset(1);
+        ColumnPage::init(p, TypeId::DOUBLE, false);
+        ColumnPage cp(p);
+        for (f64 v : {5.0, 3.5, 8.25, 1.75, 6.0})
+            ASSERT_TRUE(cp.append_f64(v).is_ok());
+        EXPECT_DOUBLE_EQ(*cp.min_f64(), 1.75);
+        EXPECT_DOUBLE_EQ(*cp.max_f64(), 8.25);
+    }
+}
+
+TEST(ColumnPageTest, MinMaxEmptyOnFreshPage) {
+    Page p{};
+    p.reset(1);
+    ColumnPage::init(p, TypeId::INT64, false);
+    ColumnPage cp(p);
+    EXPECT_FALSE(cp.min_i64().has_value());
+    EXPECT_FALSE(cp.max_i64().has_value());
+}
+
+TEST(ColumnPageTest, MinMaxEmptyOnAllNullPage) {
+    Page p{};
+    p.reset(1);
+    ColumnPage::init(p, TypeId::INT64, true);
+    ColumnPage cp(p);
+    for (int i = 0; i < 3; ++i)
+        ASSERT_TRUE(cp.append_null().is_ok());
+
+    EXPECT_FALSE(cp.min_i64().has_value());
+    EXPECT_FALSE(cp.max_i64().has_value());
+    EXPECT_EQ(cp.null_count(), 3u);
+    EXPECT_TRUE(cp.has_nulls());
+}
+
+TEST(ColumnPageTest, MinMaxTypeMismatchReturnsNullopt) {
+    Page p{};
+    p.reset(1);
+    ColumnPage::init(p, TypeId::INT64, false);
+    ColumnPage cp(p);
+    ASSERT_TRUE(cp.append_i64(42).is_ok());
+
+    EXPECT_FALSE(cp.min_i32().has_value());
+    EXPECT_FALSE(cp.max_f64().has_value());
+}
+
+TEST(ColumnPageTest, NullCountAndFlag) {
+    Page p{};
+    p.reset(1);
+    ColumnPage::init(p, TypeId::INT64, true);
+    ColumnPage cp(p);
+
+    EXPECT_FALSE(cp.has_nulls());
+    EXPECT_EQ(cp.null_count(), 0u);
+
+    ASSERT_TRUE(cp.append_null().is_ok());
+    EXPECT_TRUE(cp.has_nulls());
+    EXPECT_EQ(cp.null_count(), 1u);
+
+    ASSERT_TRUE(cp.append_i64(7).is_ok());
+    ASSERT_TRUE(cp.append_null().is_ok());
+    EXPECT_EQ(cp.null_count(), 2u);
+    EXPECT_TRUE(cp.has_nulls());
+}
+
+TEST(ColumnPageTest, MinMaxIgnoresNulls) {
+    Page p{};
+    p.reset(1);
+    ColumnPage::init(p, TypeId::INT64, true);
+    ColumnPage cp(p);
+
+    ASSERT_TRUE(cp.append_null().is_ok());
+    ASSERT_TRUE(cp.append_i64(10).is_ok());
+    ASSERT_TRUE(cp.append_null().is_ok());
+    ASSERT_TRUE(cp.append_i64(-5).is_ok());
+    ASSERT_TRUE(cp.append_null().is_ok());
+    ASSERT_TRUE(cp.append_i64(42).is_ok());
+
+    EXPECT_EQ(*cp.min_i64(), -5);
+    EXPECT_EQ(*cp.max_i64(), 42);
+    EXPECT_EQ(cp.null_count(), 3u);
+}
