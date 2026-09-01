@@ -244,6 +244,14 @@ Result<void> ColumnFile::scan(std::function<void(const ColumnPage&)> fn) {
     return Result<void>::ok();
 }
 
+Result<void> ColumnFile::read_page(PageId id, Page& out) {
+    if (id == current_page_id_) {
+        out = current_page_;
+        return Result<void>::ok();
+    }
+    return disk_.read_page(id, out);
+}
+
 Result<void> ColumnFile::flush() {
     if (!current_dirty_)
         return Result<void>::ok();

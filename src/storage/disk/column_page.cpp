@@ -78,6 +78,10 @@ bool ColumnPage::has_nulls() const {
     return (header()->flags & COL_PAGE_FLAG_HAS_NULLS) != 0;
 }
 
+u16 ColumnPage::null_bitmap_size() const {
+    return header()->null_bitmap_bytes;
+}
+
 static void clear_null_bit(byte* bitmap, u16 slot) {
     bitmap[slot / 8] &= static_cast<byte>(~(1u << (slot % 8)));
 }

@@ -44,6 +44,7 @@ class ColumnFile {
     bool is_null(u64 row_id);
 
     Result<void> scan(std::function<void(const ColumnPage&)> fn);
+    Result<void> read_page(PageId id, Page& out);
 
     Result<void> flush();
     Result<void> fsync();

@@ -69,15 +69,17 @@ class ColumnPage {
     u16 null_count() const;
     bool has_nulls() const;
 
+    const byte* value_area() const;
+    const byte* null_bitmap() const;
+    u16 null_bitmap_size() const;
+
   private:
     Page& page_;
 
     ColumnPageHeader* header();
     const ColumnPageHeader* header() const;
     byte* null_bitmap();
-    const byte* null_bitmap() const;
     byte* value_area();
-    const byte* value_area() const;
 };
 
 } // namespace nyx

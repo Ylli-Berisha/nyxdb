@@ -7,6 +7,7 @@ add_library(nyxdb_core STATIC
     storage/disk/table.cpp
     storage/memory/lru_k_replacer.cpp
     storage/memory/buffer_pool.cpp
+    executor/table_scan.cpp
 )
 
 target_include_directories(nyxdb_core PUBLIC ${CMAKE_SOURCE_DIR}/src)
