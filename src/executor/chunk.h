@@ -37,6 +37,13 @@ class Chunk {
     auto begin() const { return columns_.begin(); }
     auto end() const { return columns_.end(); }
 
+    void compact_in_place(const ColumnVector& mask) {
+        assert(mask.size() == row_count_);
+        for (auto& c : columns_)
+            c.compact_in_place(mask);
+        row_count_ = columns_.empty() ? 0 : columns_.front().size();
+    }
+
   private:
     size_t row_count_;
     std::vector<ColumnVector> columns_;

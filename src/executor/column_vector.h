@@ -141,6 +141,32 @@ class ColumnVector {
 
     void set_has_nulls(bool v) { has_nulls_ = v; }
 
+    void compact_in_place(const ColumnVector& mask) {
+        assert(mask.type() == TypeId::INT32);
+        assert(mask.size() == size_);
+
+        size_t bytes = type_size(type_);
+        size_t w = 0;
+        for (size_t r = 0; r < size_; ++r) {
+            if (mask.is_null(r))
+                continue;
+            if (mask.get_i32(r) == 0)
+                continue;
+
+            if (w != r) {
+                std::memmove(data_.data() + w * bytes, data_.data() + r * bytes, bytes);
+                if (nullable_) {
+                    bool src_null = (null_bitmap_[r / 8] >> (r % 8)) & 1u;
+                    null_bitmap_[w / 8] &= ~static_cast<u8>(1u << (w % 8));
+                    if (src_null)
+                        null_bitmap_[w / 8] |= static_cast<u8>(1u << (w % 8));
+                }
+            }
+            w++;
+        }
+        resize(w);
+    }
+
   private:
     ColumnVector(TypeId type, size_t size, bool nullable)
         : type_(type), nullable_(nullable), has_nulls_(false), size_(size) {}
