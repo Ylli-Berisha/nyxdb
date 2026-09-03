@@ -10,6 +10,7 @@ add_library(nyxdb_core STATIC
     executor/table_scan.cpp
     executor/expression.cpp
     executor/filter.cpp
+    executor/project.cpp
 )
 
 target_include_directories(nyxdb_core PUBLIC ${CMAKE_SOURCE_DIR}/src)
