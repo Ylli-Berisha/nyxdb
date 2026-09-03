@@ -5,3 +5,4 @@ function(nyx_add_integration_test name path)
 endfunction()
 
 nyx_add_integration_test(scan_e2e_test executor/scan_e2e_test.cpp)
+nyx_add_integration_test(pipeline_e2e_test executor/pipeline_e2e_test.cpp)
