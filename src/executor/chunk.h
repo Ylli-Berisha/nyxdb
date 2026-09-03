@@ -37,6 +37,20 @@ class Chunk {
     auto begin() const { return columns_.begin(); }
     auto end() const { return columns_.end(); }
 
+    void resize(size_t k) {
+        assert(k <= row_count_);
+        for (auto& c : columns_)
+            c.resize(k);
+        row_count_ = k;
+    }
+
+    void drop_prefix(size_t n) {
+        assert(n <= row_count_);
+        for (auto& c : columns_)
+            c.drop_prefix(n);
+        row_count_ -= n;
+    }
+
     void compact_in_place(const ColumnVector& mask) {
         assert(mask.size() == row_count_);
         for (auto& c : columns_)

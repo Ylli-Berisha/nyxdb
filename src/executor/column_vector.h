@@ -141,6 +141,27 @@ class ColumnVector {
 
     void set_has_nulls(bool v) { has_nulls_ = v; }
 
+    void drop_prefix(size_t n) {
+        assert(n <= size_);
+        if (n == 0)
+            return;
+
+        size_t new_size = size_ - n;
+        size_t bytes = type_size(type_);
+        if (new_size > 0)
+            std::memmove(data_.data(), data_.data() + n * bytes, new_size * bytes);
+
+        if (nullable_) {
+            for (size_t i = 0; i < new_size; ++i) {
+                bool src_null = (null_bitmap_[(i + n) / 8] >> ((i + n) % 8)) & 1u;
+                null_bitmap_[i / 8] &= ~static_cast<u8>(1u << (i % 8));
+                if (src_null)
+                    null_bitmap_[i / 8] |= static_cast<u8>(1u << (i % 8));
+            }
+        }
+        resize(new_size);
+    }
+
     void compact_in_place(const ColumnVector& mask) {
         assert(mask.type() == TypeId::INT32);
         assert(mask.size() == size_);
