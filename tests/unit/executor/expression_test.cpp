@@ -307,3 +307,312 @@ TEST(ExpressionTest, ComposedExpression) {
     EXPECT_EQ(v.get_i32(2), 1); // 95 < 100
     EXPECT_EQ(v.get_i32(3), 1); // 90 < 100
 }
+
+// --- Step 11: LogicalOp / NotOp / NullCheckOp ---
+
+// Build a nullable INT32 "boolean" column. Values encode:
+//   1  = TRUE
+//   0  = FALSE
+//   -1 = NULL (marker for the helper; actual bit set via set_null)
+static ColumnVector make_bool_col(const std::vector<i32>& vals) {
+    auto c = ColumnVector::make(TypeId::INT32, vals.size(), true);
+    for (size_t i = 0; i < vals.size(); ++i) {
+        if (vals[i] == -1)
+            c.set_null(i);
+        else
+            c.set_i32(i, vals[i]);
+    }
+    return c;
+}
+
+static Chunk make_two_bool_chunk(const std::vector<i32>& a, const std::vector<i32>& b) {
+    std::vector<ColumnVector> cols;
+    cols.push_back(make_bool_col(a));
+    cols.push_back(make_bool_col(b));
+    return Chunk(a.size(), std::move(cols));
+}
+
+TEST(LogicalOpTest, AndTruthTable) {
+    // Rows exercise every 3VL case:
+    //  i  a    b    expected(AND)
+    //  0  T    T    T
+    //  1  T    F    F
+    //  2  F    T    F
+    //  3  F    F    F
+    //  4  T    N    N
+    //  5  N    T    N
+    //  6  F    N    F   (false wins)
+    //  7  N    F    F   (false wins)
+    //  8  N    N    N
+    auto c = make_two_bool_chunk({1, 1, 0, 0, 1, -1, 0, -1, -1}, {1, 0, 1, 0, -1, 1, -1, 0, -1});
+
+    LogicalOp op(LogicalOpKind::AND, std::make_unique<ColumnRef>(0, TypeId::INT32),
+                 std::make_unique<ColumnRef>(1, TypeId::INT32));
+    auto r = op.evaluate(c);
+    ASSERT_TRUE(r.is_ok());
+    const ColumnVector& v = r.value();
+    ASSERT_EQ(v.size(), 9u);
+    EXPECT_FALSE(v.is_null(0));
+    EXPECT_EQ(v.get_i32(0), 1);
+    EXPECT_FALSE(v.is_null(1));
+    EXPECT_EQ(v.get_i32(1), 0);
+    EXPECT_FALSE(v.is_null(2));
+    EXPECT_EQ(v.get_i32(2), 0);
+    EXPECT_FALSE(v.is_null(3));
+    EXPECT_EQ(v.get_i32(3), 0);
+    EXPECT_TRUE(v.is_null(4));
+    EXPECT_TRUE(v.is_null(5));
+    EXPECT_FALSE(v.is_null(6));
+    EXPECT_EQ(v.get_i32(6), 0);
+    EXPECT_FALSE(v.is_null(7));
+    EXPECT_EQ(v.get_i32(7), 0);
+    EXPECT_TRUE(v.is_null(8));
+}
+
+TEST(LogicalOpTest, OrTruthTable) {
+    // Rows exercise every 3VL case:
+    //  i  a    b    expected(OR)
+    //  0  T    T    T
+    //  1  T    F    T
+    //  2  F    T    T
+    //  3  F    F    F
+    //  4  T    N    T   (true wins)
+    //  5  N    T    T   (true wins)
+    //  6  F    N    N
+    //  7  N    F    N
+    //  8  N    N    N
+    auto c = make_two_bool_chunk({1, 1, 0, 0, 1, -1, 0, -1, -1}, {1, 0, 1, 0, -1, 1, -1, 0, -1});
+
+    LogicalOp op(LogicalOpKind::OR, std::make_unique<ColumnRef>(0, TypeId::INT32),
+                 std::make_unique<ColumnRef>(1, TypeId::INT32));
+    auto r = op.evaluate(c);
+    ASSERT_TRUE(r.is_ok());
+    const ColumnVector& v = r.value();
+    ASSERT_EQ(v.size(), 9u);
+    EXPECT_FALSE(v.is_null(0));
+    EXPECT_EQ(v.get_i32(0), 1);
+    EXPECT_FALSE(v.is_null(1));
+    EXPECT_EQ(v.get_i32(1), 1);
+    EXPECT_FALSE(v.is_null(2));
+    EXPECT_EQ(v.get_i32(2), 1);
+    EXPECT_FALSE(v.is_null(3));
+    EXPECT_EQ(v.get_i32(3), 0);
+    EXPECT_FALSE(v.is_null(4));
+    EXPECT_EQ(v.get_i32(4), 1);
+    EXPECT_FALSE(v.is_null(5));
+    EXPECT_EQ(v.get_i32(5), 1);
+    EXPECT_TRUE(v.is_null(6));
+    EXPECT_TRUE(v.is_null(7));
+    EXPECT_TRUE(v.is_null(8));
+}
+
+TEST(LogicalOpTest, AndOnNonNullableInputs) {
+    // Both children non-nullable (BinaryOp comparison output on non-nullable data).
+    // Output should be non-nullable INT32.
+    auto ca = ColumnVector::make(TypeId::INT32, 3, false);
+    auto cb = ColumnVector::make(TypeId::INT32, 3, false);
+    ca.set_i32(0, 1);
+    ca.set_i32(1, 1);
+    ca.set_i32(2, 0);
+    cb.set_i32(0, 1);
+    cb.set_i32(1, 0);
+    cb.set_i32(2, 0);
+    std::vector<ColumnVector> cols;
+    cols.push_back(std::move(ca));
+    cols.push_back(std::move(cb));
+    Chunk c(3, std::move(cols));
+
+    LogicalOp op(LogicalOpKind::AND, std::make_unique<ColumnRef>(0, TypeId::INT32),
+                 std::make_unique<ColumnRef>(1, TypeId::INT32));
+    auto r = op.evaluate(c);
+    ASSERT_TRUE(r.is_ok());
+    const ColumnVector& v = r.value();
+    EXPECT_FALSE(v.nullable());
+    EXPECT_EQ(v.get_i32(0), 1);
+    EXPECT_EQ(v.get_i32(1), 0);
+    EXPECT_EQ(v.get_i32(2), 0);
+}
+
+TEST(NotOpTest, TruthTable) {
+    // Rows: T→F, F→T, N→N
+    auto c = make_bool_col({1, 0, -1});
+    std::vector<ColumnVector> cols;
+    cols.push_back(std::move(c));
+    Chunk ck(3, std::move(cols));
+
+    NotOp op(std::make_unique<ColumnRef>(0, TypeId::INT32));
+    auto r = op.evaluate(ck);
+    ASSERT_TRUE(r.is_ok());
+    const ColumnVector& v = r.value();
+    ASSERT_EQ(v.size(), 3u);
+    EXPECT_FALSE(v.is_null(0));
+    EXPECT_EQ(v.get_i32(0), 0);
+    EXPECT_FALSE(v.is_null(1));
+    EXPECT_EQ(v.get_i32(1), 1);
+    EXPECT_TRUE(v.is_null(2));
+}
+
+TEST(NotOpTest, NonNullableInput) {
+    auto c = ColumnVector::make(TypeId::INT32, 2, false);
+    c.set_i32(0, 1);
+    c.set_i32(1, 0);
+    std::vector<ColumnVector> cols;
+    cols.push_back(std::move(c));
+    Chunk ck(2, std::move(cols));
+
+    NotOp op(std::make_unique<ColumnRef>(0, TypeId::INT32));
+    auto r = op.evaluate(ck);
+    ASSERT_TRUE(r.is_ok());
+    const ColumnVector& v = r.value();
+    EXPECT_FALSE(v.nullable());
+    EXPECT_EQ(v.get_i32(0), 0);
+    EXPECT_EQ(v.get_i32(1), 1);
+}
+
+TEST(NullCheckOpTest, IsNullOnNullableInt64) {
+    auto c = ColumnVector::make(TypeId::INT64, 5, true);
+    c.set_i64(0, 100);
+    c.set_null(1);
+    c.set_i64(2, 200);
+    c.set_null(3);
+    c.set_i64(4, 300);
+    std::vector<ColumnVector> cols;
+    cols.push_back(std::move(c));
+    Chunk ck(5, std::move(cols));
+
+    NullCheckOp op(NullCheckKind::IS_NULL, std::make_unique<ColumnRef>(0, TypeId::INT64));
+    auto r = op.evaluate(ck);
+    ASSERT_TRUE(r.is_ok());
+    const ColumnVector& v = r.value();
+    ASSERT_EQ(v.size(), 5u);
+    EXPECT_FALSE(v.nullable());
+    EXPECT_EQ(v.get_i32(0), 0);
+    EXPECT_EQ(v.get_i32(1), 1);
+    EXPECT_EQ(v.get_i32(2), 0);
+    EXPECT_EQ(v.get_i32(3), 1);
+    EXPECT_EQ(v.get_i32(4), 0);
+}
+
+TEST(NullCheckOpTest, IsNotNullOnNullableInt64) {
+    auto c = ColumnVector::make(TypeId::INT64, 4, true);
+    c.set_i64(0, 1);
+    c.set_null(1);
+    c.set_null(2);
+    c.set_i64(3, 4);
+    std::vector<ColumnVector> cols;
+    cols.push_back(std::move(c));
+    Chunk ck(4, std::move(cols));
+
+    NullCheckOp op(NullCheckKind::IS_NOT_NULL, std::make_unique<ColumnRef>(0, TypeId::INT64));
+    auto r = op.evaluate(ck);
+    ASSERT_TRUE(r.is_ok());
+    const ColumnVector& v = r.value();
+    EXPECT_EQ(v.get_i32(0), 1);
+    EXPECT_EQ(v.get_i32(1), 0);
+    EXPECT_EQ(v.get_i32(2), 0);
+    EXPECT_EQ(v.get_i32(3), 1);
+}
+
+TEST(NullCheckOpTest, IsNullOnNonNullableIsAlwaysFalse) {
+    auto c = ColumnVector::make(TypeId::INT32, 3, false);
+    c.set_i32(0, 1);
+    c.set_i32(1, 2);
+    c.set_i32(2, 3);
+    std::vector<ColumnVector> cols;
+    cols.push_back(std::move(c));
+    Chunk ck(3, std::move(cols));
+
+    NullCheckOp op(NullCheckKind::IS_NULL, std::make_unique<ColumnRef>(0, TypeId::INT32));
+    auto r = op.evaluate(ck);
+    ASSERT_TRUE(r.is_ok());
+    const ColumnVector& v = r.value();
+    EXPECT_EQ(v.get_i32(0), 0);
+    EXPECT_EQ(v.get_i32(1), 0);
+    EXPECT_EQ(v.get_i32(2), 0);
+}
+
+TEST(NullCheckOpTest, IsNotNullOnNonNullableIsAlwaysTrue) {
+    auto c = ColumnVector::make(TypeId::INT32, 3, false);
+    c.set_i32(0, 1);
+    c.set_i32(1, 2);
+    c.set_i32(2, 3);
+    std::vector<ColumnVector> cols;
+    cols.push_back(std::move(c));
+    Chunk ck(3, std::move(cols));
+
+    NullCheckOp op(NullCheckKind::IS_NOT_NULL, std::make_unique<ColumnRef>(0, TypeId::INT32));
+    auto r = op.evaluate(ck);
+    ASSERT_TRUE(r.is_ok());
+    const ColumnVector& v = r.value();
+    EXPECT_EQ(v.get_i32(0), 1);
+    EXPECT_EQ(v.get_i32(1), 1);
+    EXPECT_EQ(v.get_i32(2), 1);
+}
+
+TEST(NullCheckOpTest, IsNullOnDouble) {
+    auto c = ColumnVector::make(TypeId::DOUBLE, 3, true);
+    c.set_f64(0, 1.5);
+    c.set_null(1);
+    c.set_f64(2, 2.5);
+    std::vector<ColumnVector> cols;
+    cols.push_back(std::move(c));
+    Chunk ck(3, std::move(cols));
+
+    NullCheckOp op(NullCheckKind::IS_NULL, std::make_unique<ColumnRef>(0, TypeId::DOUBLE));
+    auto r = op.evaluate(ck);
+    ASSERT_TRUE(r.is_ok());
+    const ColumnVector& v = r.value();
+    EXPECT_EQ(v.get_i32(0), 0);
+    EXPECT_EQ(v.get_i32(1), 1);
+    EXPECT_EQ(v.get_i32(2), 0);
+}
+
+TEST(LogicalOpTest, AndAsFilterPredicate) {
+    // Build chunk: col = [1..10] (INT64).
+    // Predicate: (col > 5) AND (col < 10) → values [1,0,0,0,0,0,1,1,1,1,0]? No:
+    // Row values are 1..10; only 6,7,8,9 satisfy both. So expected mask:
+    // i=0(v=1): 0, i=1(v=2): 0, i=2(v=3): 0, i=3(v=4): 0, i=4(v=5): 0,
+    // i=5(v=6): 1, i=6(v=7): 1, i=7(v=8): 1, i=8(v=9): 1, i=9(v=10): 0
+    auto col = ColumnVector::make(TypeId::INT64, 10, false);
+    for (i64 i = 0; i < 10; ++i)
+        col.set_i64(i, i + 1);
+    std::vector<ColumnVector> cols;
+    cols.push_back(std::move(col));
+    Chunk ck(10, std::move(cols));
+
+    auto gt =
+        std::make_unique<BinaryOp>(BinaryOpKind::GT, std::make_unique<ColumnRef>(0, TypeId::INT64),
+                                   std::make_unique<Literal>(Value{static_cast<i64>(5)}));
+    auto lt =
+        std::make_unique<BinaryOp>(BinaryOpKind::LT, std::make_unique<ColumnRef>(0, TypeId::INT64),
+                                   std::make_unique<Literal>(Value{static_cast<i64>(10)}));
+    LogicalOp op(LogicalOpKind::AND, std::move(gt), std::move(lt));
+    auto r = op.evaluate(ck);
+    ASSERT_TRUE(r.is_ok());
+    const ColumnVector& v = r.value();
+    std::vector<i32> expected = {0, 0, 0, 0, 0, 1, 1, 1, 1, 0};
+    for (size_t i = 0; i < 10; ++i)
+        EXPECT_EQ(v.get_i32(i), expected[i]) << "at i=" << i;
+}
+
+TEST(LogicalOpTest, IsNullAsFilterPredicate) {
+    auto c = ColumnVector::make(TypeId::INT64, 5, true);
+    c.set_i64(0, 10);
+    c.set_null(1);
+    c.set_i64(2, 30);
+    c.set_null(3);
+    c.set_i64(4, 50);
+    std::vector<ColumnVector> cols;
+    cols.push_back(std::move(c));
+    Chunk ck(5, std::move(cols));
+
+    NullCheckOp op(NullCheckKind::IS_NULL, std::make_unique<ColumnRef>(0, TypeId::INT64));
+    auto r = op.evaluate(ck);
+    ASSERT_TRUE(r.is_ok());
+    const ColumnVector& v = r.value();
+    EXPECT_EQ(v.get_i32(0), 0);
+    EXPECT_EQ(v.get_i32(1), 1);
+    EXPECT_EQ(v.get_i32(2), 0);
+    EXPECT_EQ(v.get_i32(3), 1);
+    EXPECT_EQ(v.get_i32(4), 0);
+}

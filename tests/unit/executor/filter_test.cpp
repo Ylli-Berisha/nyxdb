@@ -290,6 +290,38 @@ TEST_F(FilterTest, EmptyChildYieldsNothing) {
     EXPECT_FALSE(n.value().has_value());
 }
 
+TEST_F(FilterTest, WithCompoundPredicate) {
+    std::vector<i64> values;
+    for (i64 i = 1; i <= 20; ++i)
+        values.push_back(i);
+    auto t = make_int64_table("t", values);
+
+    // predicate: v > 5 AND v < 15
+    auto scan = std::make_unique<TableScan>(&t, std::vector<size_t>{0});
+    auto gt =
+        std::make_unique<BinaryOp>(BinaryOpKind::GT, std::make_unique<ColumnRef>(0, TypeId::INT64),
+                                   std::make_unique<Literal>(Value{static_cast<i64>(5)}));
+    auto lt =
+        std::make_unique<BinaryOp>(BinaryOpKind::LT, std::make_unique<ColumnRef>(0, TypeId::INT64),
+                                   std::make_unique<Literal>(Value{static_cast<i64>(15)}));
+    auto pred = std::make_unique<LogicalOp>(LogicalOpKind::AND, std::move(gt), std::move(lt));
+    Filter f(std::move(scan), std::move(pred));
+    ASSERT_TRUE(f.open().is_ok());
+
+    std::vector<i64> got;
+    while (true) {
+        auto n = f.next();
+        ASSERT_TRUE(n.is_ok());
+        if (!n.value().has_value())
+            break;
+        const Chunk& c = *n.value();
+        for (size_t i = 0; i < c.row_count(); ++i)
+            got.push_back(c.column(0).get_i64(i));
+    }
+    std::vector<i64> expected = {6, 7, 8, 9, 10, 11, 12, 13, 14};
+    EXPECT_EQ(got, expected);
+}
+
 TEST_F(FilterTest, OutputSchemaMatchesChild) {
     Schema s = {{"a", TypeId::INT32, false}, {"b", TypeId::INT64, false}};
     auto tres = Table::create(TEST_ROOT, "twocol", s);

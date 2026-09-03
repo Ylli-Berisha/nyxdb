@@ -326,6 +326,31 @@ TEST_F(PipelineE2ETest, ScanRangeNarrowsIO) {
         EXPECT_EQ(out[i], static_cast<i64>(5000 + i));
 }
 
+TEST_F(PipelineE2ETest, CompoundFilterPredicate) {
+    auto t = open_table();
+
+    auto scan = std::make_unique<TableScan>(&t, std::vector<size_t>{0});
+    auto ge =
+        std::make_unique<BinaryOp>(BinaryOpKind::GE, std::make_unique<ColumnRef>(0, TypeId::INT64),
+                                   std::make_unique<Literal>(Value{static_cast<i64>(5000)}));
+    auto lt =
+        std::make_unique<BinaryOp>(BinaryOpKind::LT, std::make_unique<ColumnRef>(0, TypeId::INT64),
+                                   std::make_unique<Literal>(Value{static_cast<i64>(5100)}));
+    auto pred = std::make_unique<LogicalOp>(LogicalOpKind::AND, std::move(ge), std::move(lt));
+    auto filter = std::make_unique<Filter>(std::move(scan), std::move(pred));
+
+    std::vector<ProjectItem> items;
+    items.push_back({std::make_unique<ColumnRef>(0, TypeId::INT64), "id", false});
+    auto project = std::make_unique<Project>(std::move(filter), std::move(items));
+
+    Limit limit(std::move(project), 50);
+
+    auto out = drain_i64(limit, 0);
+    ASSERT_EQ(out.size(), 50u);
+    for (size_t i = 0; i < 50; ++i)
+        EXPECT_EQ(out[i], static_cast<i64>(5000 + i));
+}
+
 TEST_F(PipelineE2ETest, FullDrainNoLimit) {
     auto t = open_table();
 

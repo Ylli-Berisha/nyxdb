@@ -188,4 +188,132 @@ Result<ColumnVector> BinaryOp::evaluate(const Chunk& input) {
     }
 }
 
+namespace {
+
+ColumnVector and_kernel(const ColumnVector& l, const ColumnVector& r) {
+    size_t n = l.size();
+    bool nullable = l.nullable() || r.nullable();
+    ColumnVector out = ColumnVector::make(TypeId::INT32, n, nullable);
+    for (size_t i = 0; i < n; ++i) {
+        bool ln = l.nullable() && l.is_null(i);
+        bool rn = r.nullable() && r.is_null(i);
+        bool l_false = !ln && l.get_i32(i) == 0;
+        bool r_false = !rn && r.get_i32(i) == 0;
+        if (l_false || r_false) {
+            out.set_i32(i, 0);
+            continue;
+        }
+        if (ln || rn) {
+            out.set_null(i);
+            continue;
+        }
+        out.set_i32(i, 1);
+    }
+    return out;
+}
+
+ColumnVector or_kernel(const ColumnVector& l, const ColumnVector& r) {
+    size_t n = l.size();
+    bool nullable = l.nullable() || r.nullable();
+    ColumnVector out = ColumnVector::make(TypeId::INT32, n, nullable);
+    for (size_t i = 0; i < n; ++i) {
+        bool ln = l.nullable() && l.is_null(i);
+        bool rn = r.nullable() && r.is_null(i);
+        bool l_true = !ln && l.get_i32(i) != 0;
+        bool r_true = !rn && r.get_i32(i) != 0;
+        if (l_true || r_true) {
+            out.set_i32(i, 1);
+            continue;
+        }
+        if (ln || rn) {
+            out.set_null(i);
+            continue;
+        }
+        out.set_i32(i, 0);
+    }
+    return out;
+}
+
+ColumnVector not_kernel(const ColumnVector& c) {
+    size_t n = c.size();
+    bool nullable = c.nullable();
+    ColumnVector out = ColumnVector::make(TypeId::INT32, n, nullable);
+    for (size_t i = 0; i < n; ++i) {
+        if (nullable && c.is_null(i)) {
+            out.set_null(i);
+            continue;
+        }
+        out.set_i32(i, c.get_i32(i) == 0 ? 1 : 0);
+    }
+    return out;
+}
+
+ColumnVector is_null_kernel(const ColumnVector& c, bool negate) {
+    size_t n = c.size();
+    ColumnVector out = ColumnVector::make(TypeId::INT32, n, false);
+    for (size_t i = 0; i < n; ++i) {
+        bool is_null = c.nullable() && c.is_null(i);
+        i32 v = (is_null != negate) ? 1 : 0;
+        out.set_i32(i, v);
+    }
+    return out;
+}
+
+} // namespace
+
+LogicalOp::LogicalOp(LogicalOpKind op, std::unique_ptr<Expression> left,
+                     std::unique_ptr<Expression> right)
+    : op_(op), left_(std::move(left)), right_(std::move(right)) {
+    assert(left_ != nullptr);
+    assert(right_ != nullptr);
+    assert(left_->output_type() == TypeId::INT32);
+    assert(right_->output_type() == TypeId::INT32);
+}
+
+Result<ColumnVector> LogicalOp::evaluate(const Chunk& input) {
+    auto lr = left_->evaluate(input);
+    if (lr.is_err())
+        return lr;
+    auto rr = right_->evaluate(input);
+    if (rr.is_err())
+        return rr;
+    const ColumnVector& l = lr.value();
+    const ColumnVector& r = rr.value();
+    switch (op_) {
+    case LogicalOpKind::AND:
+        return Result<ColumnVector>::ok(and_kernel(l, r));
+    case LogicalOpKind::OR:
+        return Result<ColumnVector>::ok(or_kernel(l, r));
+    }
+    return Result<ColumnVector>::err("unknown logical op");
+}
+
+NotOp::NotOp(std::unique_ptr<Expression> child) : child_(std::move(child)) {
+    assert(child_ != nullptr);
+    assert(child_->output_type() == TypeId::INT32);
+}
+
+Result<ColumnVector> NotOp::evaluate(const Chunk& input) {
+    auto cr = child_->evaluate(input);
+    if (cr.is_err())
+        return cr;
+    return Result<ColumnVector>::ok(not_kernel(cr.value()));
+}
+
+NullCheckOp::NullCheckOp(NullCheckKind kind, std::unique_ptr<Expression> child)
+    : kind_(kind), child_(std::move(child)) {
+    assert(child_ != nullptr);
+    TypeId t = child_->output_type();
+    (void)t;
+    assert(t == TypeId::INT32 || t == TypeId::INT64 || t == TypeId::DOUBLE);
+}
+
+Result<ColumnVector> NullCheckOp::evaluate(const Chunk& input) {
+    auto cr = child_->evaluate(input);
+    if (cr.is_err())
+        return cr;
+    bool negate = (kind_ == NullCheckKind::IS_NOT_NULL);
+    return Result<ColumnVector>::ok(is_null_kernel(cr.value(), negate));
+}
+
 } // namespace nyx

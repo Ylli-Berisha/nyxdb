@@ -24,6 +24,16 @@ enum class BinaryOpKind : u8 {
     NE,
 };
 
+enum class LogicalOpKind : u8 {
+    AND,
+    OR,
+};
+
+enum class NullCheckKind : u8 {
+    IS_NULL,
+    IS_NOT_NULL,
+};
+
 class Expression {
   public:
     virtual ~Expression() = default;
@@ -65,6 +75,40 @@ class BinaryOp : public Expression {
     std::unique_ptr<Expression> right_;
     TypeId input_type_;
     TypeId output_type_;
+};
+
+class LogicalOp : public Expression {
+  public:
+    LogicalOp(LogicalOpKind op, std::unique_ptr<Expression> left,
+              std::unique_ptr<Expression> right);
+    TypeId output_type() const override { return TypeId::INT32; }
+    Result<ColumnVector> evaluate(const Chunk& input) override;
+
+  private:
+    LogicalOpKind op_;
+    std::unique_ptr<Expression> left_;
+    std::unique_ptr<Expression> right_;
+};
+
+class NotOp : public Expression {
+  public:
+    explicit NotOp(std::unique_ptr<Expression> child);
+    TypeId output_type() const override { return TypeId::INT32; }
+    Result<ColumnVector> evaluate(const Chunk& input) override;
+
+  private:
+    std::unique_ptr<Expression> child_;
+};
+
+class NullCheckOp : public Expression {
+  public:
+    NullCheckOp(NullCheckKind kind, std::unique_ptr<Expression> child);
+    TypeId output_type() const override { return TypeId::INT32; }
+    Result<ColumnVector> evaluate(const Chunk& input) override;
+
+  private:
+    NullCheckKind kind_;
+    std::unique_ptr<Expression> child_;
 };
 
 } // namespace nyx
