@@ -275,6 +275,57 @@ TEST_F(PipelineE2ETest, FilterProtectsProject) {
     EXPECT_EQ(rows, 50u);
 }
 
+TEST_F(PipelineE2ETest, ScanRangeMatchesFilterResult) {
+    auto t = open_table();
+
+    auto scan = std::make_unique<TableScan>(
+        &t, std::vector<size_t>{0}, ScanRange{0, Value{static_cast<i64>(5000)}, std::nullopt});
+    auto pred =
+        std::make_unique<BinaryOp>(BinaryOpKind::GE, std::make_unique<ColumnRef>(0, TypeId::INT64),
+                                   std::make_unique<Literal>(Value{static_cast<i64>(5000)}));
+    auto filter = std::make_unique<Filter>(std::move(scan), std::move(pred));
+
+    std::vector<ProjectItem> items;
+    items.push_back({std::make_unique<ColumnRef>(0, TypeId::INT64), "id", false});
+    auto add =
+        std::make_unique<BinaryOp>(BinaryOpKind::ADD, std::make_unique<ColumnRef>(0, TypeId::INT64),
+                                   std::make_unique<Literal>(Value{static_cast<i64>(1)}));
+    items.push_back({std::move(add), "id_plus_1", false});
+    auto project = std::make_unique<Project>(std::move(filter), std::move(items));
+
+    Limit limit(std::move(project), 100);
+
+    auto pairs = drain_i64_pair(limit, 0, 1);
+    ASSERT_EQ(pairs.size(), 100u);
+    EXPECT_EQ(pairs.front(), (std::pair<i64, i64>{5000, 5001}));
+    EXPECT_EQ(pairs.back(), (std::pair<i64, i64>{5099, 5100}));
+}
+
+TEST_F(PipelineE2ETest, ScanRangeNarrowsIO) {
+    auto t = open_table();
+
+    auto scan = std::make_unique<TableScan>(
+        &t, std::vector<size_t>{0},
+        ScanRange{0, Value{static_cast<i64>(5000)}, Value{static_cast<i64>(5100)}});
+    auto pred_lo =
+        std::make_unique<BinaryOp>(BinaryOpKind::GE, std::make_unique<ColumnRef>(0, TypeId::INT64),
+                                   std::make_unique<Literal>(Value{static_cast<i64>(5000)}));
+    auto pred_hi =
+        std::make_unique<BinaryOp>(BinaryOpKind::LE, std::make_unique<ColumnRef>(0, TypeId::INT64),
+                                   std::make_unique<Literal>(Value{static_cast<i64>(5100)}));
+    auto filter_lo = std::make_unique<Filter>(std::move(scan), std::move(pred_lo));
+    auto filter_hi = std::make_unique<Filter>(std::move(filter_lo), std::move(pred_hi));
+
+    std::vector<ProjectItem> items;
+    items.push_back({std::make_unique<ColumnRef>(0, TypeId::INT64), "id", false});
+    Project project(std::move(filter_hi), std::move(items));
+
+    auto out = drain_i64(project, 0);
+    ASSERT_EQ(out.size(), 101u);
+    for (size_t i = 0; i < 101; ++i)
+        EXPECT_EQ(out[i], static_cast<i64>(5000 + i));
+}
+
 TEST_F(PipelineE2ETest, FullDrainNoLimit) {
     auto t = open_table();
 
