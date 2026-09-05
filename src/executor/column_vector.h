@@ -1,6 +1,7 @@
 #pragma once
 
 #include "common/types.h"
+#include "executor/selection_vector.h"
 #include "storage/disk/type_id.h"
 
 #include <cassert>
@@ -15,6 +16,22 @@ class ColumnVector {
         ColumnVector cv(type, 0, nullable);
         cv.resize(size);
         return cv;
+    }
+
+    static ColumnVector gather_via_sel(const ColumnVector& src, const SelectionVector& sel) {
+        ColumnVector out = ColumnVector::make(src.type_, sel.size(), src.nullable_);
+        size_t bytes = type_size(src.type_);
+        size_t out_idx = 0;
+        sel.for_each([&](u32 phys) {
+            std::memcpy(out.data_.data() + out_idx * bytes,
+                        src.data_.data() + static_cast<size_t>(phys) * bytes, bytes);
+            if (src.nullable_ && ((src.null_bitmap_[phys / 8] >> (phys % 8)) & 1u)) {
+                out.null_bitmap_[out_idx / 8] |= static_cast<u8>(1u << (out_idx % 8));
+                out.has_nulls_ = true;
+            }
+            ++out_idx;
+        });
+        return out;
     }
 
     static ColumnVector empty(TypeId type, bool nullable, size_t reserve = 0) {
