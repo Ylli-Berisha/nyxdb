@@ -1,6 +1,7 @@
 #pragma once
 
 #include "common/result.h"
+#include "common/types.h"
 #include "executor/chunk.h"
 #include "executor/expression.h"
 #include "executor/operator.h"
@@ -11,9 +12,15 @@
 
 namespace nyx {
 
+enum class FilterStrategy : u8 {
+    COMPACT,
+    SELECTION_VECTOR,
+};
+
 class Filter : public Operator {
   public:
-    Filter(std::unique_ptr<Operator> child, std::unique_ptr<Expression> predicate);
+    Filter(std::unique_ptr<Operator> child, std::unique_ptr<Expression> predicate,
+           FilterStrategy strategy = FilterStrategy::COMPACT);
 
     Result<void> open() override;
     Result<std::optional<Chunk>> next() override;
@@ -23,6 +30,7 @@ class Filter : public Operator {
   private:
     std::unique_ptr<Operator> child_;
     std::unique_ptr<Expression> predicate_;
+    FilterStrategy strategy_;
     bool opened_ = false;
 };
 

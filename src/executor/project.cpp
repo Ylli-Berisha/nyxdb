@@ -39,7 +39,7 @@ Result<std::optional<Chunk>> Project::next() {
         return Result<std::optional<Chunk>>::ok(std::nullopt);
 
     Chunk input = std::move(*in.value());
-    size_t rc = input.row_count();
+    size_t rc = input.logical_size();
 
     std::vector<ColumnVector> outs;
     outs.reserve(items_.size());

@@ -1,5 +1,7 @@
 #include "executor/chunk.h"
 #include "executor/column_vector.h"
+#include "executor/expression.h"
+#include "executor/filter.h"
 #include "executor/limit.h"
 #include "executor/table_scan.h"
 #include "storage/disk/table.h"
@@ -586,4 +588,64 @@ TEST(LimitLifecycleTest, WholeChunkSkipDoesNotOverpull) {
     EXPECT_EQ(n.value()->row_count(), 50u);
     EXPECT_EQ(raw->next_calls, 3);
     EXPECT_EQ(raw->close_calls, 1);
+}
+
+TEST_F(LimitTest, TruncatesSelVecInput) {
+    std::vector<i64> values;
+    for (i64 i = 0; i < 100; ++i)
+        values.push_back(i);
+    auto t = make_int64_table("t", values);
+
+    auto scan = std::make_unique<TableScan>(&t, std::vector<size_t>{0});
+    auto pred =
+        std::make_unique<BinaryOp>(BinaryOpKind::GE, std::make_unique<ColumnRef>(0, TypeId::INT64),
+                                   std::make_unique<Literal>(Value{static_cast<i64>(20)}));
+    auto filter = std::make_unique<Filter>(std::move(scan), std::move(pred),
+                                           FilterStrategy::SELECTION_VECTOR);
+
+    Limit l(std::move(filter), 10);
+    ASSERT_TRUE(l.open().is_ok());
+
+    auto n = l.next();
+    ASSERT_TRUE(n.is_ok());
+    ASSERT_TRUE(n.value().has_value());
+    const Chunk& c = *n.value();
+    EXPECT_TRUE(c.has_sel());
+    EXPECT_EQ(c.logical_size(), 10u);
+    for (size_t k = 0; k < 10; ++k) {
+        u32 phys = c.sel().at(k);
+        EXPECT_EQ(c.column(0).get_i64(phys), static_cast<i64>(20 + k));
+    }
+
+    auto n2 = l.next();
+    ASSERT_TRUE(n2.is_ok());
+    EXPECT_FALSE(n2.value().has_value());
+}
+
+TEST_F(LimitTest, OffsetSkipsSelVecInput) {
+    std::vector<i64> values;
+    for (i64 i = 0; i < 100; ++i)
+        values.push_back(i);
+    auto t = make_int64_table("t", values);
+
+    auto scan = std::make_unique<TableScan>(&t, std::vector<size_t>{0});
+    auto pred =
+        std::make_unique<BinaryOp>(BinaryOpKind::GE, std::make_unique<ColumnRef>(0, TypeId::INT64),
+                                   std::make_unique<Literal>(Value{static_cast<i64>(20)}));
+    auto filter = std::make_unique<Filter>(std::move(scan), std::move(pred),
+                                           FilterStrategy::SELECTION_VECTOR);
+
+    Limit l(std::move(filter), 5, 10);
+    ASSERT_TRUE(l.open().is_ok());
+
+    auto n = l.next();
+    ASSERT_TRUE(n.is_ok());
+    ASSERT_TRUE(n.value().has_value());
+    const Chunk& c = *n.value();
+    EXPECT_TRUE(c.has_sel());
+    EXPECT_EQ(c.logical_size(), 10u);
+    for (size_t k = 0; k < 10; ++k) {
+        u32 phys = c.sel().at(k);
+        EXPECT_EQ(c.column(0).get_i64(phys), static_cast<i64>(25 + k));
+    }
 }
