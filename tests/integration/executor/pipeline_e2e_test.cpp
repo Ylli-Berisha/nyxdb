@@ -4,6 +4,7 @@
 #include "executor/limit.h"
 #include "executor/operator.h"
 #include "executor/project.h"
+#include "executor/sort.h"
 #include "executor/table_scan.h"
 #include "storage/disk/table.h"
 
@@ -421,6 +422,56 @@ TEST_F(PipelineE2ETest, SelectionVectorMatchesCompact) {
     ASSERT_EQ(compact_out.size(), 50u);
     EXPECT_EQ(compact_out.front(), 3100);
     EXPECT_EQ(compact_out.back(), 3149);
+}
+
+TEST_F(PipelineE2ETest, ScanFilterSortLimit) {
+    auto t = open_table();
+
+    auto scan = std::make_unique<TableScan>(&t, std::vector<size_t>{0});
+    auto pred =
+        std::make_unique<BinaryOp>(BinaryOpKind::LT, std::make_unique<ColumnRef>(0, TypeId::INT64),
+                                   std::make_unique<Literal>(Value{static_cast<i64>(5000)}));
+    auto filter = std::make_unique<Filter>(std::move(scan), std::move(pred));
+
+    std::vector<SortKey> keys;
+    keys.push_back(SortKey{std::make_unique<ColumnRef>(0, TypeId::INT64), SortDirection::DESC,
+                           NullOrder::LAST});
+    auto sort = std::make_unique<Sort>(std::move(filter), std::move(keys));
+
+    Limit limit(std::move(sort), 100);
+
+    auto out = drain_i64(limit, 0);
+    ASSERT_EQ(out.size(), 100u);
+    for (size_t i = 0; i < 100; ++i)
+        EXPECT_EQ(out[i], static_cast<i64>(4999 - i));
+}
+
+TEST_F(PipelineE2ETest, SortConsumesSelectionVectorChunks) {
+    Table t = open_table();
+
+    auto build_and_drain = [&](FilterStrategy s) {
+        auto scan = std::make_unique<TableScan>(&t, std::vector<size_t>{0, 1});
+        auto pred = std::make_unique<BinaryOp>(
+            BinaryOpKind::GE, std::make_unique<ColumnRef>(0, TypeId::INT64),
+            std::make_unique<Literal>(Value{static_cast<i64>(3000)}));
+        auto filter = std::make_unique<Filter>(std::move(scan), std::move(pred), s);
+
+        std::vector<SortKey> keys;
+        keys.push_back(SortKey{std::make_unique<ColumnRef>(1, TypeId::INT32), SortDirection::ASC,
+                               NullOrder::LAST});
+        keys.push_back(SortKey{std::make_unique<ColumnRef>(0, TypeId::INT64), SortDirection::DESC,
+                               NullOrder::LAST});
+        auto sort = std::make_unique<Sort>(std::move(filter), std::move(keys));
+
+        Limit limit(std::move(sort), 500);
+        return drain_i64(limit, 0);
+    };
+
+    auto compact_out = build_and_drain(FilterStrategy::COMPACT);
+    auto sel_out = build_and_drain(FilterStrategy::SELECTION_VECTOR);
+
+    EXPECT_EQ(compact_out, sel_out);
+    ASSERT_EQ(compact_out.size(), 500u);
 }
 
 TEST_F(PipelineE2ETest, ChainedFilterMixedStrategies) {
