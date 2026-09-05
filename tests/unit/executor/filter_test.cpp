@@ -338,3 +338,105 @@ TEST_F(FilterTest, OutputSchemaMatchesChild) {
     EXPECT_EQ(os[0].name, "a");
     EXPECT_EQ(os[1].name, "b");
 }
+
+TEST_F(FilterTest, SelectionVectorModeProducesSelChunks) {
+    std::vector<i64> values;
+    for (i64 i = 0; i < 100; ++i)
+        values.push_back(i);
+    auto t = make_int64_table("t", values);
+
+    auto scan = std::make_unique<TableScan>(&t, std::vector<size_t>{0});
+    auto pred =
+        std::make_unique<BinaryOp>(BinaryOpKind::GE, std::make_unique<ColumnRef>(0, TypeId::INT64),
+                                   std::make_unique<Literal>(Value{static_cast<i64>(50)}));
+    Filter f(std::move(scan), std::move(pred), FilterStrategy::SELECTION_VECTOR);
+    ASSERT_TRUE(f.open().is_ok());
+
+    auto n = f.next();
+    ASSERT_TRUE(n.is_ok());
+    ASSERT_TRUE(n.value().has_value());
+    const Chunk& c = *n.value();
+    EXPECT_TRUE(c.has_sel());
+    EXPECT_EQ(c.logical_size(), 50u);
+    EXPECT_EQ(c.row_count(), 100u);
+    for (size_t k = 0; k < 50; ++k) {
+        u32 phys = c.sel().at(k);
+        EXPECT_EQ(c.column(0).get_i64(phys), static_cast<i64>(50 + k));
+    }
+}
+
+TEST_F(FilterTest, SelectionVectorModeSkipsEmptyChunks) {
+    std::vector<i64> values;
+    for (i64 i = 0; i < 100; ++i)
+        values.push_back(i);
+    auto t = make_int64_table("t", values);
+
+    auto scan = std::make_unique<TableScan>(&t, std::vector<size_t>{0});
+    auto pred =
+        std::make_unique<BinaryOp>(BinaryOpKind::GT, std::make_unique<ColumnRef>(0, TypeId::INT64),
+                                   std::make_unique<Literal>(Value{static_cast<i64>(10000)}));
+    Filter f(std::move(scan), std::move(pred), FilterStrategy::SELECTION_VECTOR);
+    ASSERT_TRUE(f.open().is_ok());
+
+    auto n = f.next();
+    ASSERT_TRUE(n.is_ok());
+    EXPECT_FALSE(n.value().has_value());
+}
+
+TEST_F(FilterTest, ChainedFiltersInSelVecMode) {
+    std::vector<i64> values;
+    for (i64 i = 0; i < 100; ++i)
+        values.push_back(i);
+    auto t = make_int64_table("t", values);
+
+    auto scan = std::make_unique<TableScan>(&t, std::vector<size_t>{0});
+    auto pred1 =
+        std::make_unique<BinaryOp>(BinaryOpKind::GE, std::make_unique<ColumnRef>(0, TypeId::INT64),
+                                   std::make_unique<Literal>(Value{static_cast<i64>(20)}));
+    auto pred2 =
+        std::make_unique<BinaryOp>(BinaryOpKind::LT, std::make_unique<ColumnRef>(0, TypeId::INT64),
+                                   std::make_unique<Literal>(Value{static_cast<i64>(60)}));
+    auto f1 = std::make_unique<Filter>(std::move(scan), std::move(pred1),
+                                       FilterStrategy::SELECTION_VECTOR);
+    Filter f2(std::move(f1), std::move(pred2), FilterStrategy::SELECTION_VECTOR);
+    ASSERT_TRUE(f2.open().is_ok());
+
+    auto n = f2.next();
+    ASSERT_TRUE(n.is_ok());
+    ASSERT_TRUE(n.value().has_value());
+    const Chunk& c = *n.value();
+    EXPECT_TRUE(c.has_sel());
+    EXPECT_EQ(c.logical_size(), 40u);
+    for (size_t k = 0; k < 40; ++k) {
+        u32 phys = c.sel().at(k);
+        EXPECT_EQ(c.column(0).get_i64(phys), static_cast<i64>(20 + k));
+    }
+}
+
+TEST_F(FilterTest, CompactFollowingSelVecMaterializes) {
+    std::vector<i64> values;
+    for (i64 i = 0; i < 100; ++i)
+        values.push_back(i);
+    auto t = make_int64_table("t", values);
+
+    auto scan = std::make_unique<TableScan>(&t, std::vector<size_t>{0});
+    auto pred1 =
+        std::make_unique<BinaryOp>(BinaryOpKind::GE, std::make_unique<ColumnRef>(0, TypeId::INT64),
+                                   std::make_unique<Literal>(Value{static_cast<i64>(20)}));
+    auto pred2 =
+        std::make_unique<BinaryOp>(BinaryOpKind::LT, std::make_unique<ColumnRef>(0, TypeId::INT64),
+                                   std::make_unique<Literal>(Value{static_cast<i64>(60)}));
+    auto f1 = std::make_unique<Filter>(std::move(scan), std::move(pred1),
+                                       FilterStrategy::SELECTION_VECTOR);
+    Filter f2(std::move(f1), std::move(pred2), FilterStrategy::COMPACT);
+    ASSERT_TRUE(f2.open().is_ok());
+
+    auto n = f2.next();
+    ASSERT_TRUE(n.is_ok());
+    ASSERT_TRUE(n.value().has_value());
+    const Chunk& c = *n.value();
+    EXPECT_FALSE(c.has_sel());
+    ASSERT_EQ(c.row_count(), 40u);
+    for (size_t i = 0; i < 40; ++i)
+        EXPECT_EQ(c.column(0).get_i64(i), static_cast<i64>(20 + i));
+}

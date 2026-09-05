@@ -1,6 +1,7 @@
 #include "executor/chunk.h"
 #include "executor/column_vector.h"
 #include "executor/expression.h"
+#include "executor/filter.h"
 #include "executor/project.h"
 #include "executor/table_scan.h"
 #include "storage/disk/table.h"
@@ -316,4 +317,41 @@ TEST_F(ProjectTest, PropagatesExpressionError) {
 
     auto n = p.next();
     EXPECT_TRUE(n.is_err());
+}
+
+TEST_F(ProjectTest, MaterializesSelVecInput) {
+    std::vector<i64> values;
+    for (i64 i = 0; i < 100; ++i)
+        values.push_back(i);
+    auto t = make_int64_table("t", values);
+
+    auto scan = std::make_unique<TableScan>(&t, std::vector<size_t>{0});
+    auto pred =
+        std::make_unique<BinaryOp>(BinaryOpKind::GE, std::make_unique<ColumnRef>(0, TypeId::INT64),
+                                   std::make_unique<Literal>(Value{static_cast<i64>(50)}));
+    auto filter = std::make_unique<Filter>(std::move(scan), std::move(pred),
+                                           FilterStrategy::SELECTION_VECTOR);
+
+    auto add =
+        std::make_unique<BinaryOp>(BinaryOpKind::ADD, std::make_unique<ColumnRef>(0, TypeId::INT64),
+                                   std::make_unique<Literal>(Value{static_cast<i64>(1)}));
+    std::vector<ProjectItem> items;
+    items.push_back({std::move(add), "v_plus_1", false});
+    Project p(std::move(filter), std::move(items));
+    ASSERT_TRUE(p.open().is_ok());
+
+    std::vector<i64> got;
+    while (true) {
+        auto n = p.next();
+        ASSERT_TRUE(n.is_ok());
+        if (!n.value().has_value())
+            break;
+        const Chunk& c = *n.value();
+        EXPECT_FALSE(c.has_sel());
+        for (size_t i = 0; i < c.row_count(); ++i)
+            got.push_back(c.column(0).get_i64(i));
+    }
+    ASSERT_EQ(got.size(), 50u);
+    for (size_t i = 0; i < 50; ++i)
+        EXPECT_EQ(got[i], static_cast<i64>(50 + i) + 1);
 }

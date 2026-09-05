@@ -53,8 +53,8 @@ Result<std::optional<Chunk>> Limit::next() {
 
         if (skipped_ < offset_) {
             size_t skip_left = offset_ - skipped_;
-            if (chunk.row_count() <= skip_left) {
-                skipped_ += chunk.row_count();
+            if (chunk.logical_size() <= skip_left) {
+                skipped_ += chunk.logical_size();
                 continue;
             }
             chunk.drop_prefix(skip_left);
@@ -62,8 +62,8 @@ Result<std::optional<Chunk>> Limit::next() {
         }
 
         size_t remaining = limit_ - emitted_;
-        if (chunk.row_count() <= remaining) {
-            emitted_ += chunk.row_count();
+        if (chunk.logical_size() <= remaining) {
+            emitted_ += chunk.logical_size();
             if (emitted_ == limit_)
                 close_child_eager();
             return Result<std::optional<Chunk>>::ok(std::move(chunk));
