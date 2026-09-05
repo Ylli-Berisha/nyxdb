@@ -369,3 +369,80 @@ TEST_F(PipelineE2ETest, FullDrainNoLimit) {
     for (size_t i = 0; i < 5000; ++i)
         EXPECT_EQ(out[i], static_cast<i64>(i));
 }
+
+TEST_F(PipelineE2ETest, SelectionVectorFilterProjectLimit) {
+    auto t = open_table();
+
+    auto scan = std::make_unique<TableScan>(&t, std::vector<size_t>{0});
+    auto pred =
+        std::make_unique<BinaryOp>(BinaryOpKind::GE, std::make_unique<ColumnRef>(0, TypeId::INT64),
+                                   std::make_unique<Literal>(Value{static_cast<i64>(5000)}));
+    auto filter = std::make_unique<Filter>(std::move(scan), std::move(pred),
+                                           FilterStrategy::SELECTION_VECTOR);
+
+    std::vector<ProjectItem> items;
+    items.push_back({std::make_unique<ColumnRef>(0, TypeId::INT64), "id", false});
+    auto add =
+        std::make_unique<BinaryOp>(BinaryOpKind::ADD, std::make_unique<ColumnRef>(0, TypeId::INT64),
+                                   std::make_unique<Literal>(Value{static_cast<i64>(1)}));
+    items.push_back({std::move(add), "id_plus_1", false});
+    auto project = std::make_unique<Project>(std::move(filter), std::move(items));
+
+    Limit limit(std::move(project), 100);
+
+    auto pairs = drain_i64_pair(limit, 0, 1);
+    ASSERT_EQ(pairs.size(), 100u);
+    EXPECT_EQ(pairs.front(), (std::pair<i64, i64>{5000, 5001}));
+    EXPECT_EQ(pairs.back(), (std::pair<i64, i64>{5099, 5100}));
+    for (size_t i = 0; i < pairs.size(); ++i)
+        EXPECT_EQ(pairs[i].second, pairs[i].first + 1);
+}
+
+TEST_F(PipelineE2ETest, SelectionVectorMatchesCompact) {
+    Table t = open_table();
+
+    auto build_and_drain = [&](FilterStrategy s) {
+        auto scan = std::make_unique<TableScan>(&t, std::vector<size_t>{0});
+        auto pred = std::make_unique<BinaryOp>(
+            BinaryOpKind::GE, std::make_unique<ColumnRef>(0, TypeId::INT64),
+            std::make_unique<Literal>(Value{static_cast<i64>(3000)}));
+        auto filter = std::make_unique<Filter>(std::move(scan), std::move(pred), s);
+        std::vector<ProjectItem> items;
+        items.push_back({std::make_unique<ColumnRef>(0, TypeId::INT64), "id", false});
+        auto project = std::make_unique<Project>(std::move(filter), std::move(items));
+        Limit limit(std::move(project), 100, 50);
+        return drain_i64(limit, 0);
+    };
+
+    auto compact_out = build_and_drain(FilterStrategy::COMPACT);
+    auto sel_out = build_and_drain(FilterStrategy::SELECTION_VECTOR);
+
+    EXPECT_EQ(compact_out, sel_out);
+    ASSERT_EQ(compact_out.size(), 50u);
+    EXPECT_EQ(compact_out.front(), 3100);
+    EXPECT_EQ(compact_out.back(), 3149);
+}
+
+TEST_F(PipelineE2ETest, ChainedFilterMixedStrategies) {
+    auto t = open_table();
+
+    auto scan = std::make_unique<TableScan>(&t, std::vector<size_t>{0});
+    auto p1 =
+        std::make_unique<BinaryOp>(BinaryOpKind::GE, std::make_unique<ColumnRef>(0, TypeId::INT64),
+                                   std::make_unique<Literal>(Value{static_cast<i64>(1000)}));
+    auto f1 =
+        std::make_unique<Filter>(std::move(scan), std::move(p1), FilterStrategy::SELECTION_VECTOR);
+    auto p2 =
+        std::make_unique<BinaryOp>(BinaryOpKind::LT, std::make_unique<ColumnRef>(0, TypeId::INT64),
+                                   std::make_unique<Literal>(Value{static_cast<i64>(2000)}));
+    auto f2 = std::make_unique<Filter>(std::move(f1), std::move(p2), FilterStrategy::COMPACT);
+
+    std::vector<ProjectItem> items;
+    items.push_back({std::make_unique<ColumnRef>(0, TypeId::INT64), "id", false});
+    Project project(std::move(f2), std::move(items));
+
+    auto out = drain_i64(project, 0);
+    ASSERT_EQ(out.size(), 1000u);
+    for (size_t i = 0; i < 1000; ++i)
+        EXPECT_EQ(out[i], static_cast<i64>(1000 + i));
+}
