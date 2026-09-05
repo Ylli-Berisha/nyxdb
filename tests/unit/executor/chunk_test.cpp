@@ -100,3 +100,165 @@ TEST(ChunkTest, MoveConstructionPreservesData) {
     for (i64 i = 0; i < 4; ++i)
         EXPECT_EQ(b.column(0).get_i64(static_cast<size_t>(i)), i + 42);
 }
+
+TEST(ChunkSelTest, DefaultsToNoSel) {
+    auto cv = ColumnVector::make(TypeId::INT64, 5, false);
+    std::vector<ColumnVector> cols;
+    cols.push_back(std::move(cv));
+    Chunk c(5, std::move(cols));
+    EXPECT_FALSE(c.has_sel());
+    EXPECT_EQ(c.logical_size(), 5u);
+    EXPECT_EQ(c.row_count(), 5u);
+}
+
+TEST(ChunkSelTest, SetSelChangesLogicalSize) {
+    auto cv = ColumnVector::make(TypeId::INT64, 10, false);
+    for (i64 i = 0; i < 10; ++i)
+        cv.set_i64(static_cast<size_t>(i), i);
+    std::vector<ColumnVector> cols;
+    cols.push_back(std::move(cv));
+    Chunk c(10, std::move(cols));
+
+    c.set_sel(SelectionVector::from_dense({1, 3, 5, 7}, 10));
+    EXPECT_TRUE(c.has_sel());
+    EXPECT_EQ(c.logical_size(), 4u);
+    EXPECT_EQ(c.row_count(), 10u);
+    EXPECT_EQ(c.sel().at(0), 1u);
+    EXPECT_EQ(c.sel().at(3), 7u);
+}
+
+TEST(ChunkSelTest, MaterializeGathersLiveRows) {
+    auto cv = ColumnVector::make(TypeId::INT64, 10, true);
+    for (i64 i = 0; i < 10; ++i)
+        cv.set_i64(static_cast<size_t>(i), i * 10);
+    cv.set_null(3);
+    cv.set_null(7);
+    std::vector<ColumnVector> cols;
+    cols.push_back(std::move(cv));
+    Chunk c(10, std::move(cols));
+
+    c.set_sel(SelectionVector::from_dense({2, 3, 5, 7}, 10));
+    c.materialize();
+
+    EXPECT_FALSE(c.has_sel());
+    EXPECT_EQ(c.row_count(), 4u);
+    EXPECT_EQ(c.logical_size(), 4u);
+    EXPECT_FALSE(c.column(0).is_null(0));
+    EXPECT_EQ(c.column(0).get_i64(0), 20);
+    EXPECT_TRUE(c.column(0).is_null(1));
+    EXPECT_FALSE(c.column(0).is_null(2));
+    EXPECT_EQ(c.column(0).get_i64(2), 50);
+    EXPECT_TRUE(c.column(0).is_null(3));
+}
+
+TEST(ChunkSelTest, MaterializeIsNoOpWhenNoSel) {
+    auto cv = ColumnVector::make(TypeId::INT32, 3, false);
+    cv.set_i32(0, 10);
+    cv.set_i32(1, 20);
+    cv.set_i32(2, 30);
+    std::vector<ColumnVector> cols;
+    cols.push_back(std::move(cv));
+    Chunk c(3, std::move(cols));
+
+    c.materialize();
+    EXPECT_EQ(c.row_count(), 3u);
+    EXPECT_EQ(c.column(0).get_i32(0), 10);
+    EXPECT_EQ(c.column(0).get_i32(2), 30);
+}
+
+TEST(ChunkSelTest, CompactFromSelFiltersLiveRows) {
+    auto cv = ColumnVector::make(TypeId::INT64, 10, false);
+    for (i64 i = 0; i < 10; ++i)
+        cv.set_i64(static_cast<size_t>(i), i);
+    std::vector<ColumnVector> cols;
+    cols.push_back(std::move(cv));
+    Chunk c(10, std::move(cols));
+
+    c.set_sel(SelectionVector::from_dense({0, 2, 4, 6, 8}, 10));
+
+    auto mask = ColumnVector::make(TypeId::INT32, 5, false);
+    mask.set_i32(0, 0);
+    mask.set_i32(1, 1);
+    mask.set_i32(2, 0);
+    mask.set_i32(3, 1);
+    mask.set_i32(4, 1);
+    c.compact_from_sel(mask);
+
+    EXPECT_FALSE(c.has_sel());
+    ASSERT_EQ(c.row_count(), 3u);
+    EXPECT_EQ(c.column(0).get_i64(0), 2);
+    EXPECT_EQ(c.column(0).get_i64(1), 6);
+    EXPECT_EQ(c.column(0).get_i64(2), 8);
+}
+
+TEST(ChunkSelTest, ResizeWithSelTruncatesSel) {
+    auto cv = ColumnVector::make(TypeId::INT64, 10, false);
+    for (i64 i = 0; i < 10; ++i)
+        cv.set_i64(static_cast<size_t>(i), i);
+    std::vector<ColumnVector> cols;
+    cols.push_back(std::move(cv));
+    Chunk c(10, std::move(cols));
+
+    c.set_sel(SelectionVector::from_dense({1, 3, 5, 7, 9}, 10));
+    c.resize(3);
+    EXPECT_TRUE(c.has_sel());
+    EXPECT_EQ(c.logical_size(), 3u);
+    EXPECT_EQ(c.row_count(), 10u);
+    EXPECT_EQ(c.sel().at(0), 1u);
+    EXPECT_EQ(c.sel().at(2), 5u);
+}
+
+TEST(ChunkSelTest, DropPrefixWithSelDropsSelPrefix) {
+    auto cv = ColumnVector::make(TypeId::INT64, 10, false);
+    for (i64 i = 0; i < 10; ++i)
+        cv.set_i64(static_cast<size_t>(i), i);
+    std::vector<ColumnVector> cols;
+    cols.push_back(std::move(cv));
+    Chunk c(10, std::move(cols));
+
+    c.set_sel(SelectionVector::from_dense({1, 3, 5, 7, 9}, 10));
+    c.drop_prefix(2);
+    EXPECT_TRUE(c.has_sel());
+    EXPECT_EQ(c.logical_size(), 3u);
+    EXPECT_EQ(c.row_count(), 10u);
+    EXPECT_EQ(c.sel().at(0), 5u);
+    EXPECT_EQ(c.sel().at(2), 9u);
+}
+
+TEST(ChunkSelTest, ResizeWithoutSelBehavesPhysically) {
+    auto cv = ColumnVector::make(TypeId::INT64, 10, false);
+    for (i64 i = 0; i < 10; ++i)
+        cv.set_i64(static_cast<size_t>(i), i);
+    std::vector<ColumnVector> cols;
+    cols.push_back(std::move(cv));
+    Chunk c(10, std::move(cols));
+
+    c.resize(4);
+    EXPECT_FALSE(c.has_sel());
+    EXPECT_EQ(c.row_count(), 4u);
+    EXPECT_EQ(c.column(0).size(), 4u);
+    EXPECT_EQ(c.column(0).get_i64(3), 3);
+}
+
+TEST(ColumnVectorGatherTest, ViaSelWithNulls) {
+    auto cv = ColumnVector::make(TypeId::INT64, 8, true);
+    for (i64 i = 0; i < 8; ++i)
+        cv.set_i64(static_cast<size_t>(i), i * 100);
+    cv.set_null(2);
+    cv.set_null(5);
+
+    auto sel = SelectionVector::from_dense({0, 2, 3, 5, 6}, 8);
+    auto out = ColumnVector::gather_via_sel(cv, sel);
+
+    ASSERT_EQ(out.size(), 5u);
+    EXPECT_TRUE(out.nullable());
+    EXPECT_TRUE(out.has_nulls());
+    EXPECT_FALSE(out.is_null(0));
+    EXPECT_EQ(out.get_i64(0), 0);
+    EXPECT_TRUE(out.is_null(1));
+    EXPECT_FALSE(out.is_null(2));
+    EXPECT_EQ(out.get_i64(2), 300);
+    EXPECT_TRUE(out.is_null(3));
+    EXPECT_FALSE(out.is_null(4));
+    EXPECT_EQ(out.get_i64(4), 600);
+}
