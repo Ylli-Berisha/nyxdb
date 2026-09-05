@@ -616,3 +616,165 @@ TEST(LogicalOpTest, IsNullAsFilterPredicate) {
     EXPECT_EQ(v.get_i32(3), 1);
     EXPECT_EQ(v.get_i32(4), 0);
 }
+
+TEST(ColumnRefSelTest, GathersViaSelWhenPresent) {
+    auto cv = ColumnVector::make(TypeId::INT64, 10, false);
+    for (i64 i = 0; i < 10; ++i)
+        cv.set_i64(static_cast<size_t>(i), i * 10);
+    std::vector<ColumnVector> cols;
+    cols.push_back(std::move(cv));
+    Chunk c(10, std::move(cols));
+    c.set_sel(SelectionVector::from_dense({1, 3, 5, 7, 9}, 10));
+
+    ColumnRef ref(0, TypeId::INT64);
+    auto r = ref.evaluate(c);
+    ASSERT_TRUE(r.is_ok());
+    const ColumnVector& v = r.value();
+    ASSERT_EQ(v.size(), 5u);
+    EXPECT_EQ(v.get_i64(0), 10);
+    EXPECT_EQ(v.get_i64(1), 30);
+    EXPECT_EQ(v.get_i64(2), 50);
+    EXPECT_EQ(v.get_i64(3), 70);
+    EXPECT_EQ(v.get_i64(4), 90);
+}
+
+TEST(ColumnRefSelTest, PreservesNullsWhenGathering) {
+    auto cv = ColumnVector::make(TypeId::INT64, 6, true);
+    for (i64 i = 0; i < 6; ++i)
+        cv.set_i64(static_cast<size_t>(i), i * 100);
+    cv.set_null(1);
+    cv.set_null(4);
+    std::vector<ColumnVector> cols;
+    cols.push_back(std::move(cv));
+    Chunk c(6, std::move(cols));
+    c.set_sel(SelectionVector::from_dense({0, 1, 3, 4}, 6));
+
+    ColumnRef ref(0, TypeId::INT64);
+    auto r = ref.evaluate(c);
+    ASSERT_TRUE(r.is_ok());
+    const ColumnVector& v = r.value();
+    ASSERT_EQ(v.size(), 4u);
+    EXPECT_FALSE(v.is_null(0));
+    EXPECT_EQ(v.get_i64(0), 0);
+    EXPECT_TRUE(v.is_null(1));
+    EXPECT_FALSE(v.is_null(2));
+    EXPECT_EQ(v.get_i64(2), 300);
+    EXPECT_TRUE(v.is_null(3));
+}
+
+TEST(LiteralSelTest, BroadcastsToLogicalSize) {
+    auto placeholder = ColumnVector::make(TypeId::INT32, 100, false);
+    std::vector<ColumnVector> cols;
+    cols.push_back(std::move(placeholder));
+    Chunk c(100, std::move(cols));
+    c.set_sel(SelectionVector::from_dense({10, 20, 30}, 100));
+
+    Literal lit(Value{static_cast<i32>(42)});
+    auto r = lit.evaluate(c);
+    ASSERT_TRUE(r.is_ok());
+    const ColumnVector& v = r.value();
+    ASSERT_EQ(v.size(), 3u);
+    for (size_t i = 0; i < 3; ++i)
+        EXPECT_EQ(v.get_i32(i), 42);
+}
+
+TEST(BinaryOpSelTest, AddWithSelInput) {
+    auto cv = ColumnVector::make(TypeId::INT64, 10, false);
+    for (i64 i = 0; i < 10; ++i)
+        cv.set_i64(static_cast<size_t>(i), i);
+    std::vector<ColumnVector> cols;
+    cols.push_back(std::move(cv));
+    Chunk c(10, std::move(cols));
+    c.set_sel(SelectionVector::from_dense({1, 3, 5, 7, 9}, 10));
+
+    BinaryOp add(BinaryOpKind::ADD, std::make_unique<ColumnRef>(0, TypeId::INT64),
+                 std::make_unique<Literal>(Value{static_cast<i64>(100)}));
+    auto r = add.evaluate(c);
+    ASSERT_TRUE(r.is_ok());
+    const ColumnVector& v = r.value();
+    ASSERT_EQ(v.size(), 5u);
+    EXPECT_EQ(v.get_i64(0), 101);
+    EXPECT_EQ(v.get_i64(1), 103);
+    EXPECT_EQ(v.get_i64(2), 105);
+    EXPECT_EQ(v.get_i64(3), 107);
+    EXPECT_EQ(v.get_i64(4), 109);
+}
+
+TEST(BinaryOpSelTest, ComparisonWithSelInput) {
+    auto cv = ColumnVector::make(TypeId::INT64, 10, false);
+    for (i64 i = 0; i < 10; ++i)
+        cv.set_i64(static_cast<size_t>(i), i);
+    std::vector<ColumnVector> cols;
+    cols.push_back(std::move(cv));
+    Chunk c(10, std::move(cols));
+    c.set_sel(SelectionVector::from_dense({1, 3, 5, 7, 9}, 10));
+
+    BinaryOp gt(BinaryOpKind::GT, std::make_unique<ColumnRef>(0, TypeId::INT64),
+                std::make_unique<Literal>(Value{static_cast<i64>(4)}));
+    auto r = gt.evaluate(c);
+    ASSERT_TRUE(r.is_ok());
+    const ColumnVector& v = r.value();
+    ASSERT_EQ(v.size(), 5u);
+    EXPECT_EQ(v.get_i32(0), 0);
+    EXPECT_EQ(v.get_i32(1), 0);
+    EXPECT_EQ(v.get_i32(2), 1);
+    EXPECT_EQ(v.get_i32(3), 1);
+    EXPECT_EQ(v.get_i32(4), 1);
+}
+
+TEST(LogicalOpSelTest, AndWithSelInput) {
+    auto ca = ColumnVector::make(TypeId::INT32, 6, false);
+    auto cb = ColumnVector::make(TypeId::INT32, 6, false);
+    ca.set_i32(0, 1);
+    ca.set_i32(1, 1);
+    ca.set_i32(2, 0);
+    ca.set_i32(3, 1);
+    ca.set_i32(4, 0);
+    ca.set_i32(5, 1);
+    cb.set_i32(0, 1);
+    cb.set_i32(1, 0);
+    cb.set_i32(2, 1);
+    cb.set_i32(3, 1);
+    cb.set_i32(4, 0);
+    cb.set_i32(5, 0);
+    std::vector<ColumnVector> cols;
+    cols.push_back(std::move(ca));
+    cols.push_back(std::move(cb));
+    Chunk c(6, std::move(cols));
+    c.set_sel(SelectionVector::from_dense({0, 2, 3, 5}, 6));
+
+    LogicalOp op(LogicalOpKind::AND, std::make_unique<ColumnRef>(0, TypeId::INT32),
+                 std::make_unique<ColumnRef>(1, TypeId::INT32));
+    auto r = op.evaluate(c);
+    ASSERT_TRUE(r.is_ok());
+    const ColumnVector& v = r.value();
+    ASSERT_EQ(v.size(), 4u);
+    EXPECT_EQ(v.get_i32(0), 1);
+    EXPECT_EQ(v.get_i32(1), 0);
+    EXPECT_EQ(v.get_i32(2), 1);
+    EXPECT_EQ(v.get_i32(3), 0);
+}
+
+TEST(NullCheckOpSelTest, IsNullWithSelInput) {
+    auto cv = ColumnVector::make(TypeId::INT64, 8, true);
+    for (i64 i = 0; i < 8; ++i)
+        cv.set_i64(static_cast<size_t>(i), i);
+    cv.set_null(1);
+    cv.set_null(3);
+    cv.set_null(6);
+    std::vector<ColumnVector> cols;
+    cols.push_back(std::move(cv));
+    Chunk c(8, std::move(cols));
+    c.set_sel(SelectionVector::from_dense({0, 1, 3, 5, 6}, 8));
+
+    NullCheckOp op(NullCheckKind::IS_NULL, std::make_unique<ColumnRef>(0, TypeId::INT64));
+    auto r = op.evaluate(c);
+    ASSERT_TRUE(r.is_ok());
+    const ColumnVector& v = r.value();
+    ASSERT_EQ(v.size(), 5u);
+    EXPECT_EQ(v.get_i32(0), 0);
+    EXPECT_EQ(v.get_i32(1), 1);
+    EXPECT_EQ(v.get_i32(2), 1);
+    EXPECT_EQ(v.get_i32(3), 0);
+    EXPECT_EQ(v.get_i32(4), 1);
+}

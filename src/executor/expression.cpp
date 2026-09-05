@@ -130,6 +130,9 @@ ColumnRef::ColumnRef(size_t index, TypeId type) : index_(index), type_(type) {
 Result<ColumnVector> ColumnRef::evaluate(const Chunk& input) {
     assert(index_ < input.column_count());
     assert(input.column(index_).type() == type_);
+    if (input.has_sel())
+        return Result<ColumnVector>::ok(
+            ColumnVector::gather_via_sel(input.column(index_), input.sel()));
     return Result<ColumnVector>::ok(input.column(index_));
 }
 
@@ -138,7 +141,7 @@ Literal::Literal(Value value) : value_(std::move(value)), type_(variant_type(val
 }
 
 Result<ColumnVector> Literal::evaluate(const Chunk& input) {
-    size_t n = input.row_count();
+    size_t n = input.logical_size();
     ColumnVector out = ColumnVector::make(type_, n, false);
     if (type_ == TypeId::INT32) {
         i32 v = std::get<i32>(value_);
