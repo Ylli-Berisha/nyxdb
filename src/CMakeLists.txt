@@ -13,6 +13,7 @@ add_library(nyxdb_core STATIC
     executor/project.cpp
     executor/limit.cpp
     executor/selection_vector.cpp
+    executor/sort.cpp
 )
 
 target_include_directories(nyxdb_core PUBLIC ${CMAKE_SOURCE_DIR}/src)
