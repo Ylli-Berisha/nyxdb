@@ -75,16 +75,48 @@ Result<void> Sort::consume_and_sort_() {
     return Result<void>::ok();
 }
 
+static int compare_typed(const ColumnVector& lc, size_t li, const ColumnVector& rc, size_t ri) {
+    assert(lc.type() == rc.type());
+    switch (lc.type()) {
+    case TypeId::INT32: {
+        i32 a = lc.get_i32(li);
+        i32 b = rc.get_i32(ri);
+        return (a < b) ? -1 : (a > b) ? 1 : 0;
+    }
+    case TypeId::INT64: {
+        i64 a = lc.get_i64(li);
+        i64 b = rc.get_i64(ri);
+        return (a < b) ? -1 : (a > b) ? 1 : 0;
+    }
+    case TypeId::DOUBLE: {
+        f64 a = lc.get_f64(li);
+        f64 b = rc.get_f64(ri);
+        return (a < b) ? -1 : (a > b) ? 1 : 0;
+    }
+    default:
+        assert(false);
+        return 0;
+    }
+}
+
 bool Sort::less_(const RowRef& l, const RowRef& r) const {
-    assert(keys_.size() == 1);
-    const auto& lc = key_cols_[l.chunk_idx][0];
-    const auto& rc = key_cols_[r.chunk_idx][0];
-    assert(lc.type() == TypeId::INT64);
-    assert(rc.type() == TypeId::INT64);
-    assert(keys_[0].direction == SortDirection::ASC);
-    assert(!lc.is_null(l.row_idx));
-    assert(!rc.is_null(r.row_idx));
-    return lc.get_i64(l.row_idx) < rc.get_i64(r.row_idx);
+    for (size_t k = 0; k < keys_.size(); ++k) {
+        const ColumnVector& lc = key_cols_[l.chunk_idx][k];
+        const ColumnVector& rc = key_cols_[r.chunk_idx][k];
+        bool ln = lc.is_null(l.row_idx);
+        bool rn = rc.is_null(r.row_idx);
+        if (ln && rn)
+            continue;
+        if (ln)
+            return keys_[k].nulls == NullOrder::FIRST;
+        if (rn)
+            return keys_[k].nulls == NullOrder::LAST;
+        int cmp = compare_typed(lc, l.row_idx, rc, r.row_idx);
+        if (cmp == 0)
+            continue;
+        return keys_[k].direction == SortDirection::ASC ? (cmp < 0) : (cmp > 0);
+    }
+    return false;
 }
 
 Chunk Sort::emit_slice_(size_t begin, size_t end) {
