@@ -12,6 +12,9 @@ data/
 *.swo
 *~
 
+# Claude tooling artifacts
+.claude/
+
 # OS
 .DS_Store
 Thumbs.db
@@ -33,3 +36,4 @@ install_manifest.txt
 TASKS.md
 EXECUTOR.md
 SEL_VEC_STATUS.md
+NYXDB_STATE.md
