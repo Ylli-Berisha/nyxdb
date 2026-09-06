@@ -427,6 +427,133 @@ TEST_F(HashJoinTest, MultiKeyNullInAnyKeyDropped) {
     EXPECT_EQ(got, expected);
 }
 
+TEST_F(HashJoinTest, LeftOuterEmitsNullForUnmatched) {
+    auto l = make_kv_table("l", {{1, 10}, {2, 20}, {3, 30}, {4, 40}});
+    auto r = make_kv_table("r", {{1, 100}, {3, 300}});
+
+    auto build_scan = std::make_unique<TableScan>(&r, std::vector<size_t>{0, 1});
+    auto probe_scan = std::make_unique<TableScan>(&l, std::vector<size_t>{0, 1});
+    HashJoin join(std::move(build_scan), std::move(probe_scan), col0_i64_key(), col0_i64_key(),
+                  JoinType::LEFT_OUTER);
+
+    ASSERT_TRUE(join.open().is_ok());
+    std::vector<std::tuple<i64, i64, bool, i64, bool, i64>> got;
+    while (true) {
+        auto n = join.next();
+        ASSERT_TRUE(n.is_ok());
+        if (!n.value().has_value())
+            break;
+        const Chunk& c = *n.value();
+        for (size_t i = 0; i < c.row_count(); ++i) {
+            bool id_null = c.column(2).is_null(i);
+            bool w_null = c.column(3).is_null(i);
+            got.emplace_back(c.column(0).get_i64(i), c.column(1).get_i64(i), id_null,
+                             id_null ? 0 : c.column(2).get_i64(i), w_null,
+                             w_null ? 0 : c.column(3).get_i64(i));
+        }
+    }
+    join.close();
+    std::sort(got.begin(), got.end());
+    std::vector<std::tuple<i64, i64, bool, i64, bool, i64>> expected = {
+        {1, 10, false, 1, false, 100},
+        {2, 20, true, 0, true, 0},
+        {3, 30, false, 3, false, 300},
+        {4, 40, true, 0, true, 0},
+    };
+    EXPECT_EQ(got, expected);
+}
+
+TEST_F(HashJoinTest, LeftOuterBuildColsForcedNullable) {
+    Schema ls = {{"lid", TypeId::INT64, false}, {"lv", TypeId::INT64, false}};
+    auto lt = Table::create(TEST_ROOT, "l_left", ls);
+    ASSERT_TRUE(lt.is_ok());
+    auto l = std::move(lt.value());
+    Schema rs = {{"rid", TypeId::INT64, false}, {"rw", TypeId::INT64, false}};
+    auto rt = Table::create(TEST_ROOT, "r_left", rs);
+    ASSERT_TRUE(rt.is_ok());
+    auto r = std::move(rt.value());
+
+    auto build_scan = std::make_unique<TableScan>(&r, std::vector<size_t>{0, 1});
+    auto probe_scan = std::make_unique<TableScan>(&l, std::vector<size_t>{0, 1});
+    HashJoin join(std::move(build_scan), std::move(probe_scan), col0_i64_key(), col0_i64_key(),
+                  JoinType::LEFT_OUTER);
+
+    const Schema& os = join.output_schema();
+    ASSERT_EQ(os.size(), 4u);
+    EXPECT_FALSE(os[0].nullable);
+    EXPECT_FALSE(os[1].nullable);
+    EXPECT_TRUE(os[2].nullable);
+    EXPECT_TRUE(os[3].nullable);
+}
+
+TEST_F(HashJoinTest, SemiJoinDeduplicatesBuildDuplicates) {
+    auto l = make_kv_table("l", {{1, 10}, {2, 20}, {3, 30}});
+    auto r = make_kv_table("r", {{1, 100}, {1, 101}, {1, 102}, {3, 300}});
+
+    auto build_scan = std::make_unique<TableScan>(&r, std::vector<size_t>{0, 1});
+    auto probe_scan = std::make_unique<TableScan>(&l, std::vector<size_t>{0, 1});
+    HashJoin join(std::move(build_scan), std::move(probe_scan), col0_i64_key(), col0_i64_key(),
+                  JoinType::SEMI);
+
+    ASSERT_EQ(join.output_schema().size(), 2u);
+
+    ASSERT_TRUE(join.open().is_ok());
+    std::vector<std::pair<i64, i64>> got;
+    while (true) {
+        auto n = join.next();
+        ASSERT_TRUE(n.is_ok());
+        if (!n.value().has_value())
+            break;
+        const Chunk& c = *n.value();
+        ASSERT_EQ(c.column_count(), 2u);
+        for (size_t i = 0; i < c.row_count(); ++i)
+            got.emplace_back(c.column(0).get_i64(i), c.column(1).get_i64(i));
+    }
+    join.close();
+    std::sort(got.begin(), got.end());
+    std::vector<std::pair<i64, i64>> expected = {{1, 10}, {3, 30}};
+    EXPECT_EQ(got, expected);
+}
+
+TEST_F(HashJoinTest, AntiJoinEmitsUnmatchedIncludingNullKeys) {
+    auto l = make_kv_table("l", {{1, 10}, {2, 20}, {0, 30}, {3, 40}}, true, {2});
+    auto r = make_kv_table("r", {{1, 100}, {3, 300}});
+
+    auto build_scan = std::make_unique<TableScan>(&r, std::vector<size_t>{0, 1});
+    auto probe_scan = std::make_unique<TableScan>(&l, std::vector<size_t>{0, 1});
+    HashJoin join(std::move(build_scan), std::move(probe_scan), col0_i64_key(), col0_i64_key(),
+                  JoinType::ANTI);
+
+    ASSERT_EQ(join.output_schema().size(), 2u);
+
+    ASSERT_TRUE(join.open().is_ok());
+    std::vector<std::pair<bool, i64>> got_id;
+    std::vector<i64> got_v;
+    while (true) {
+        auto n = join.next();
+        ASSERT_TRUE(n.is_ok());
+        if (!n.value().has_value())
+            break;
+        const Chunk& c = *n.value();
+        ASSERT_EQ(c.column_count(), 2u);
+        for (size_t i = 0; i < c.row_count(); ++i) {
+            bool id_null = c.column(0).is_null(i);
+            got_id.emplace_back(id_null, id_null ? 0 : c.column(0).get_i64(i));
+            got_v.push_back(c.column(1).get_i64(i));
+        }
+    }
+    join.close();
+    ASSERT_EQ(got_v.size(), 2u);
+    std::vector<std::pair<bool, i64>> want_id = {{false, 2}, {true, 0}};
+    std::vector<i64> want_v = {20, 30};
+    std::sort(got_v.begin(), got_v.end());
+    std::sort(want_v.begin(), want_v.end());
+    EXPECT_EQ(got_v, want_v);
+    std::sort(got_id.begin(), got_id.end());
+    std::sort(want_id.begin(), want_id.end());
+    EXPECT_EQ(got_id, want_id);
+}
+
 TEST_F(HashJoinTest, OutputSchemaMatchesConcat) {
     Schema ls = {{"lid", TypeId::INT64, false}, {"lv", TypeId::INT64, false}};
     auto lt = Table::create(TEST_ROOT, "l_schema", ls);

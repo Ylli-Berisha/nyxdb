@@ -12,6 +12,7 @@
 namespace nyx {
 
 static constexpr size_t MAX_COMPOSITE_KEY_BYTES = 128;
+static constexpr u32 NO_BUILD = UINT32_MAX;
 
 static u32 next_pow2(u32 x) {
     if (x <= 1)
@@ -68,13 +69,19 @@ HashJoin::HashJoin(std::unique_ptr<Operator> build, std::unique_ptr<Operator> pr
         total_key_bytes += type_size(t);
     }
     assert(total_key_bytes <= MAX_COMPOSITE_KEY_BYTES);
-    assert(type_ == JoinType::INNER);
 
     output_schema_ = probe_child_->output_schema();
-    for (const auto& col : build_child_->output_schema())
-        output_schema_.push_back(col);
     n_probe_cols_ = probe_child_->output_schema().size();
-    n_build_cols_ = build_child_->output_schema().size();
+    if (type_ == JoinType::INNER || type_ == JoinType::LEFT_OUTER) {
+        for (auto col : build_child_->output_schema()) {
+            if (type_ == JoinType::LEFT_OUTER)
+                col.nullable = true;
+            output_schema_.push_back(col);
+        }
+        n_build_cols_ = build_child_->output_schema().size();
+    } else {
+        n_build_cols_ = 0;
+    }
 }
 
 Result<void> HashJoin::open() {
@@ -179,6 +186,7 @@ Result<bool> HashJoin::load_next_probe_chunk_() {
 
         match_pairs_.clear();
         u32 rc = static_cast<u32>(chunk.row_count());
+        std::vector<bool> matched(rc, false);
         for (u32 r = 0; r < rc; ++r) {
             if (any_key_null(per_chunk_keys, r))
                 continue;
@@ -187,10 +195,27 @@ Result<bool> HashJoin::load_next_probe_chunk_() {
             while (table_[slot].chunk_idx != UINT32_MAX) {
                 if (table_[slot].hash == h) {
                     const Entry& e = table_[slot];
-                    if (keys_equal(build_key_cols_[e.chunk_idx], e.row_idx, per_chunk_keys, r))
-                        match_pairs_.push_back(MatchPair{r, e.chunk_idx, e.row_idx});
+                    if (keys_equal(build_key_cols_[e.chunk_idx], e.row_idx, per_chunk_keys, r)) {
+                        if (type_ == JoinType::INNER || type_ == JoinType::LEFT_OUTER) {
+                            match_pairs_.push_back(MatchPair{r, e.chunk_idx, e.row_idx});
+                            matched[r] = true;
+                        } else if (type_ == JoinType::SEMI) {
+                            match_pairs_.push_back(MatchPair{r, NO_BUILD, 0});
+                            matched[r] = true;
+                            break;
+                        } else {
+                            matched[r] = true;
+                            break;
+                        }
+                    }
                 }
                 slot = (slot + 1u) & mask_;
+            }
+        }
+        if (type_ == JoinType::LEFT_OUTER || type_ == JoinType::ANTI) {
+            for (u32 r = 0; r < rc; ++r) {
+                if (!matched[r])
+                    match_pairs_.push_back(MatchPair{r, NO_BUILD, 0});
             }
         }
         emit_cursor_ = 0;
@@ -220,6 +245,10 @@ Chunk HashJoin::emit_output_slice_() {
         case TypeId::INT32:
             for (size_t i = 0; i < n; ++i) {
                 const MatchPair& mp = match_pairs_[emit_cursor_ + i];
+                if (!is_probe && mp.build_chunk == NO_BUILD) {
+                    out.append_null();
+                    continue;
+                }
                 const ColumnVector& src = is_probe
                                               ? probe_chunk_->column(src_col_idx)
                                               : build_chunks_[mp.build_chunk].column(src_col_idx);
@@ -233,6 +262,10 @@ Chunk HashJoin::emit_output_slice_() {
         case TypeId::INT64:
             for (size_t i = 0; i < n; ++i) {
                 const MatchPair& mp = match_pairs_[emit_cursor_ + i];
+                if (!is_probe && mp.build_chunk == NO_BUILD) {
+                    out.append_null();
+                    continue;
+                }
                 const ColumnVector& src = is_probe
                                               ? probe_chunk_->column(src_col_idx)
                                               : build_chunks_[mp.build_chunk].column(src_col_idx);
@@ -246,6 +279,10 @@ Chunk HashJoin::emit_output_slice_() {
         case TypeId::DOUBLE:
             for (size_t i = 0; i < n; ++i) {
                 const MatchPair& mp = match_pairs_[emit_cursor_ + i];
+                if (!is_probe && mp.build_chunk == NO_BUILD) {
+                    out.append_null();
+                    continue;
+                }
                 const ColumnVector& src = is_probe
                                               ? probe_chunk_->column(src_col_idx)
                                               : build_chunks_[mp.build_chunk].column(src_col_idx);
