@@ -243,6 +243,190 @@ TEST_F(HashJoinTest, OutputChunksBoundedByCHUNK_SIZE) {
     EXPECT_GE(chunk_sizes.size(), 3u);
 }
 
+TEST_F(HashJoinTest, MultiKeyBothInt64) {
+    Schema s = {
+        {"a", TypeId::INT64, false}, {"b", TypeId::INT64, false}, {"v", TypeId::INT64, false}};
+    auto lt = Table::create(TEST_ROOT, "l_mk", s);
+    ASSERT_TRUE(lt.is_ok());
+    auto l = std::move(lt.value());
+    auto rt = Table::create(TEST_ROOT, "r_mk", s);
+    ASSERT_TRUE(rt.is_ok());
+    auto r = std::move(rt.value());
+
+    std::vector<std::vector<Value>> l_rows = {
+        {Value{static_cast<i64>(1)}, Value{static_cast<i64>(10)}, Value{static_cast<i64>(100)}},
+        {Value{static_cast<i64>(1)}, Value{static_cast<i64>(20)}, Value{static_cast<i64>(101)}},
+        {Value{static_cast<i64>(2)}, Value{static_cast<i64>(10)}, Value{static_cast<i64>(102)}},
+    };
+    ASSERT_TRUE(l.insert_many(l_rows).is_ok());
+    std::vector<std::vector<Value>> r_rows = {
+        {Value{static_cast<i64>(1)}, Value{static_cast<i64>(10)}, Value{static_cast<i64>(1000)}},
+        {Value{static_cast<i64>(1)}, Value{static_cast<i64>(99)}, Value{static_cast<i64>(1001)}},
+        {Value{static_cast<i64>(2)}, Value{static_cast<i64>(10)}, Value{static_cast<i64>(1002)}},
+    };
+    ASSERT_TRUE(r.insert_many(r_rows).is_ok());
+
+    std::vector<std::unique_ptr<Expression>> build_keys;
+    build_keys.push_back(std::make_unique<ColumnRef>(0, TypeId::INT64));
+    build_keys.push_back(std::make_unique<ColumnRef>(1, TypeId::INT64));
+    std::vector<std::unique_ptr<Expression>> probe_keys;
+    probe_keys.push_back(std::make_unique<ColumnRef>(0, TypeId::INT64));
+    probe_keys.push_back(std::make_unique<ColumnRef>(1, TypeId::INT64));
+
+    auto build_scan = std::make_unique<TableScan>(&r, std::vector<size_t>{0, 1, 2});
+    auto probe_scan = std::make_unique<TableScan>(&l, std::vector<size_t>{0, 1, 2});
+    HashJoin join(std::move(build_scan), std::move(probe_scan), std::move(build_keys),
+                  std::move(probe_keys));
+
+    ASSERT_TRUE(join.open().is_ok());
+    std::vector<std::tuple<i64, i64, i64, i64, i64, i64>> got;
+    while (true) {
+        auto n = join.next();
+        ASSERT_TRUE(n.is_ok());
+        if (!n.value().has_value())
+            break;
+        const Chunk& c = *n.value();
+        for (size_t i = 0; i < c.row_count(); ++i)
+            got.emplace_back(c.column(0).get_i64(i), c.column(1).get_i64(i), c.column(2).get_i64(i),
+                             c.column(3).get_i64(i), c.column(4).get_i64(i),
+                             c.column(5).get_i64(i));
+    }
+    join.close();
+    std::sort(got.begin(), got.end());
+    std::vector<std::tuple<i64, i64, i64, i64, i64, i64>> expected = {
+        {1, 10, 100, 1, 10, 1000},
+        {2, 10, 102, 2, 10, 1002},
+    };
+    EXPECT_EQ(got, expected);
+}
+
+TEST_F(HashJoinTest, MultiKeyMixedTypes) {
+    Schema ls = {
+        {"a", TypeId::INT32, false}, {"b", TypeId::DOUBLE, false}, {"v", TypeId::INT64, false}};
+    Schema rs = {
+        {"a", TypeId::INT32, false}, {"b", TypeId::DOUBLE, false}, {"w", TypeId::INT64, false}};
+    auto lt = Table::create(TEST_ROOT, "l_mkt", ls);
+    ASSERT_TRUE(lt.is_ok());
+    auto l = std::move(lt.value());
+    auto rt = Table::create(TEST_ROOT, "r_mkt", rs);
+    ASSERT_TRUE(rt.is_ok());
+    auto r = std::move(rt.value());
+
+    std::vector<std::vector<Value>> l_rows = {
+        {Value{static_cast<i32>(1)}, Value{static_cast<f64>(1.5)}, Value{static_cast<i64>(10)}},
+        {Value{static_cast<i32>(2)}, Value{static_cast<f64>(2.5)}, Value{static_cast<i64>(20)}},
+        {Value{static_cast<i32>(1)}, Value{static_cast<f64>(9.9)}, Value{static_cast<i64>(30)}},
+    };
+    ASSERT_TRUE(l.insert_many(l_rows).is_ok());
+    std::vector<std::vector<Value>> r_rows = {
+        {Value{static_cast<i32>(1)}, Value{static_cast<f64>(1.5)}, Value{static_cast<i64>(100)}},
+        {Value{static_cast<i32>(2)}, Value{static_cast<f64>(2.5)}, Value{static_cast<i64>(200)}},
+        {Value{static_cast<i32>(3)}, Value{static_cast<f64>(3.5)}, Value{static_cast<i64>(300)}},
+    };
+    ASSERT_TRUE(r.insert_many(r_rows).is_ok());
+
+    std::vector<std::unique_ptr<Expression>> build_keys;
+    build_keys.push_back(std::make_unique<ColumnRef>(0, TypeId::INT32));
+    build_keys.push_back(std::make_unique<ColumnRef>(1, TypeId::DOUBLE));
+    std::vector<std::unique_ptr<Expression>> probe_keys;
+    probe_keys.push_back(std::make_unique<ColumnRef>(0, TypeId::INT32));
+    probe_keys.push_back(std::make_unique<ColumnRef>(1, TypeId::DOUBLE));
+
+    auto build_scan = std::make_unique<TableScan>(&r, std::vector<size_t>{0, 1, 2});
+    auto probe_scan = std::make_unique<TableScan>(&l, std::vector<size_t>{0, 1, 2});
+    HashJoin join(std::move(build_scan), std::move(probe_scan), std::move(build_keys),
+                  std::move(probe_keys));
+
+    ASSERT_TRUE(join.open().is_ok());
+    std::vector<std::tuple<i32, f64, i64, i32, f64, i64>> got;
+    while (true) {
+        auto n = join.next();
+        ASSERT_TRUE(n.is_ok());
+        if (!n.value().has_value())
+            break;
+        const Chunk& c = *n.value();
+        for (size_t i = 0; i < c.row_count(); ++i)
+            got.emplace_back(c.column(0).get_i32(i), c.column(1).get_f64(i), c.column(2).get_i64(i),
+                             c.column(3).get_i32(i), c.column(4).get_f64(i),
+                             c.column(5).get_i64(i));
+    }
+    join.close();
+    std::sort(got.begin(), got.end(),
+              [](const auto& a, const auto& b) { return std::get<0>(a) < std::get<0>(b); });
+    ASSERT_EQ(got.size(), 2u);
+    EXPECT_EQ(std::get<0>(got[0]), 1);
+    EXPECT_EQ(std::get<1>(got[0]), 1.5);
+    EXPECT_EQ(std::get<2>(got[0]), 10);
+    EXPECT_EQ(std::get<5>(got[0]), 100);
+    EXPECT_EQ(std::get<0>(got[1]), 2);
+    EXPECT_EQ(std::get<1>(got[1]), 2.5);
+    EXPECT_EQ(std::get<2>(got[1]), 20);
+    EXPECT_EQ(std::get<5>(got[1]), 200);
+}
+
+TEST_F(HashJoinTest, MultiKeyNullInAnyKeyDropped) {
+    Schema s = {
+        {"a", TypeId::INT64, true}, {"b", TypeId::INT64, true}, {"v", TypeId::INT64, false}};
+    auto lt = Table::create(TEST_ROOT, "l_nk", s);
+    ASSERT_TRUE(lt.is_ok());
+    auto l = std::move(lt.value());
+    auto rt = Table::create(TEST_ROOT, "r_nk", s);
+    ASSERT_TRUE(rt.is_ok());
+    auto r = std::move(rt.value());
+
+    std::vector<std::vector<Value>> l_rows = {
+        {Value{static_cast<i64>(1)}, Value{static_cast<i64>(10)}, Value{static_cast<i64>(100)}},
+        {Value{static_cast<i64>(1)}, Value{std::monostate{}}, Value{static_cast<i64>(101)}},
+        {Value{std::monostate{}}, Value{static_cast<i64>(10)}, Value{static_cast<i64>(102)}},
+        {Value{static_cast<i64>(2)}, Value{static_cast<i64>(20)}, Value{static_cast<i64>(103)}},
+    };
+    ASSERT_TRUE(l.insert_many(l_rows).is_ok());
+    std::vector<std::vector<Value>> r_rows = {
+        {Value{static_cast<i64>(1)}, Value{static_cast<i64>(10)}, Value{static_cast<i64>(1000)}},
+        {Value{static_cast<i64>(2)}, Value{std::monostate{}}, Value{static_cast<i64>(1001)}},
+        {Value{static_cast<i64>(2)}, Value{static_cast<i64>(20)}, Value{static_cast<i64>(1002)}},
+    };
+    ASSERT_TRUE(r.insert_many(r_rows).is_ok());
+
+    std::vector<std::unique_ptr<Expression>> build_keys;
+    build_keys.push_back(std::make_unique<ColumnRef>(0, TypeId::INT64));
+    build_keys.push_back(std::make_unique<ColumnRef>(1, TypeId::INT64));
+    std::vector<std::unique_ptr<Expression>> probe_keys;
+    probe_keys.push_back(std::make_unique<ColumnRef>(0, TypeId::INT64));
+    probe_keys.push_back(std::make_unique<ColumnRef>(1, TypeId::INT64));
+
+    auto build_scan = std::make_unique<TableScan>(&r, std::vector<size_t>{0, 1, 2});
+    auto probe_scan = std::make_unique<TableScan>(&l, std::vector<size_t>{0, 1, 2});
+    HashJoin join(std::move(build_scan), std::move(probe_scan), std::move(build_keys),
+                  std::move(probe_keys));
+
+    ASSERT_TRUE(join.open().is_ok());
+    std::vector<std::tuple<i64, i64, i64, i64, i64, i64>> got;
+    while (true) {
+        auto n = join.next();
+        ASSERT_TRUE(n.is_ok());
+        if (!n.value().has_value())
+            break;
+        const Chunk& c = *n.value();
+        for (size_t i = 0; i < c.row_count(); ++i) {
+            EXPECT_FALSE(c.column(0).is_null(i));
+            EXPECT_FALSE(c.column(1).is_null(i));
+            EXPECT_FALSE(c.column(3).is_null(i));
+            EXPECT_FALSE(c.column(4).is_null(i));
+            got.emplace_back(c.column(0).get_i64(i), c.column(1).get_i64(i), c.column(2).get_i64(i),
+                             c.column(3).get_i64(i), c.column(4).get_i64(i),
+                             c.column(5).get_i64(i));
+        }
+    }
+    join.close();
+    std::sort(got.begin(), got.end());
+    std::vector<std::tuple<i64, i64, i64, i64, i64, i64>> expected = {
+        {1, 10, 100, 1, 10, 1000},
+        {2, 20, 103, 2, 20, 1002},
+    };
+    EXPECT_EQ(got, expected);
+}
+
 TEST_F(HashJoinTest, OutputSchemaMatchesConcat) {
     Schema ls = {{"lid", TypeId::INT64, false}, {"lv", TypeId::INT64, false}};
     auto lt = Table::create(TEST_ROOT, "l_schema", ls);

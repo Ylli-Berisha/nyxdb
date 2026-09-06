@@ -11,14 +11,44 @@
 
 namespace nyx {
 
+static constexpr size_t MAX_COMPOSITE_KEY_BYTES = 128;
+
 static u32 next_pow2(u32 x) {
     if (x <= 1)
         return 1;
     return 1u << (32 - __builtin_clz(x - 1));
 }
 
-static u32 hash_i64(i64 v) {
-    return static_cast<u32>(xxhash64(reinterpret_cast<const byte*>(&v), sizeof(i64)));
+static u32 hash_row(const std::vector<ColumnVector>& key_cols, size_t row_idx) {
+    byte buf[MAX_COMPOSITE_KEY_BYTES];
+    size_t off = 0;
+    for (const auto& col : key_cols) {
+        size_t sz = type_size(col.type());
+        assert(off + sz <= MAX_COMPOSITE_KEY_BYTES);
+        std::memcpy(buf + off, col.data() + row_idx * sz, sz);
+        off += sz;
+    }
+    return static_cast<u32>(xxhash64(buf, off));
+}
+
+static bool any_key_null(const std::vector<ColumnVector>& key_cols, size_t row_idx) {
+    for (const auto& col : key_cols) {
+        if (col.is_null(row_idx))
+            return true;
+    }
+    return false;
+}
+
+static bool keys_equal(const std::vector<ColumnVector>& lc, size_t li,
+                       const std::vector<ColumnVector>& rc, size_t ri) {
+    assert(lc.size() == rc.size());
+    for (size_t k = 0; k < lc.size(); ++k) {
+        assert(lc[k].type() == rc[k].type());
+        size_t sz = type_size(lc[k].type());
+        if (std::memcmp(lc[k].data() + li * sz, rc[k].data() + ri * sz, sz) != 0)
+            return false;
+    }
+    return true;
 }
 
 HashJoin::HashJoin(std::unique_ptr<Operator> build, std::unique_ptr<Operator> probe,
@@ -30,9 +60,14 @@ HashJoin::HashJoin(std::unique_ptr<Operator> build, std::unique_ptr<Operator> pr
     assert(probe_child_ != nullptr);
     assert(!build_keys_.empty());
     assert(build_keys_.size() == probe_keys_.size());
-    assert(build_keys_.size() == 1);
-    assert(build_keys_[0]->output_type() == TypeId::INT64);
-    assert(probe_keys_[0]->output_type() == TypeId::INT64);
+    size_t total_key_bytes = 0;
+    for (size_t i = 0; i < build_keys_.size(); ++i) {
+        TypeId t = build_keys_[i]->output_type();
+        assert(t == probe_keys_[i]->output_type());
+        assert(t == TypeId::INT32 || t == TypeId::INT64 || t == TypeId::DOUBLE);
+        total_key_bytes += type_size(t);
+    }
+    assert(total_key_bytes <= MAX_COMPOSITE_KEY_BYTES);
     assert(type_ == JoinType::INNER);
 
     output_schema_ = probe_child_->output_schema();
@@ -88,9 +123,9 @@ Result<void> HashJoin::build_side_() {
 
     size_t n_nonnull = 0;
     for (size_t ci = 0; ci < build_chunks_.size(); ++ci) {
-        const ColumnVector& key = build_key_cols_[ci][0];
+        const auto& keys = build_key_cols_[ci];
         for (size_t r = 0; r < build_chunks_[ci].row_count(); ++r) {
-            if (!key.is_null(r))
+            if (!any_key_null(keys, r))
                 ++n_nonnull;
         }
     }
@@ -100,12 +135,12 @@ Result<void> HashJoin::build_side_() {
     mask_ = table_size - 1;
 
     for (u32 ci = 0; ci < static_cast<u32>(build_chunks_.size()); ++ci) {
-        const ColumnVector& key = build_key_cols_[ci][0];
+        const auto& keys = build_key_cols_[ci];
         u32 rc = static_cast<u32>(build_chunks_[ci].row_count());
         for (u32 r = 0; r < rc; ++r) {
-            if (key.is_null(r))
+            if (any_key_null(keys, r))
                 continue;
-            u32 h = hash_i64(key.get_i64(r));
+            u32 h = hash_row(keys, r);
             u32 slot = h & mask_;
             while (table_[slot].chunk_idx != UINT32_MAX)
                 slot = (slot + 1u) & mask_;
@@ -143,19 +178,16 @@ Result<bool> HashJoin::load_next_probe_chunk_() {
         }
 
         match_pairs_.clear();
-        const ColumnVector& probe_key = per_chunk_keys[0];
         u32 rc = static_cast<u32>(chunk.row_count());
         for (u32 r = 0; r < rc; ++r) {
-            if (probe_key.is_null(r))
+            if (any_key_null(per_chunk_keys, r))
                 continue;
-            i64 pk = probe_key.get_i64(r);
-            u32 h = hash_i64(pk);
+            u32 h = hash_row(per_chunk_keys, r);
             u32 slot = h & mask_;
             while (table_[slot].chunk_idx != UINT32_MAX) {
                 if (table_[slot].hash == h) {
                     const Entry& e = table_[slot];
-                    const ColumnVector& bk = build_key_cols_[e.chunk_idx][0];
-                    if (bk.get_i64(e.row_idx) == pk)
+                    if (keys_equal(build_key_cols_[e.chunk_idx], e.row_idx, per_chunk_keys, r))
                         match_pairs_.push_back(MatchPair{r, e.chunk_idx, e.row_idx});
                 }
                 slot = (slot + 1u) & mask_;
