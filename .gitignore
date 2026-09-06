@@ -14,6 +14,7 @@ data/
 
 # Claude tooling artifacts
 .claude/
+/memory/
 
 # OS
 .DS_Store

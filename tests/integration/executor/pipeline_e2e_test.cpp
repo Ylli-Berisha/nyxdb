@@ -1,6 +1,7 @@
 #include "executor/chunk.h"
 #include "executor/expression.h"
 #include "executor/filter.h"
+#include "executor/hash_join.h"
 #include "executor/limit.h"
 #include "executor/operator.h"
 #include "executor/project.h"
@@ -61,6 +62,21 @@ class PipelineE2ETest : public ::testing::Test {
         auto tres = Table::open(TEST_ROOT, "t");
         EXPECT_TRUE(tres.is_ok());
         return std::move(tres.value());
+    }
+
+    Table make_dims_table() {
+        Schema s = {{"cat", TypeId::INT32, false}, {"mult", TypeId::INT64, false}};
+        auto tres = Table::create(TEST_ROOT, "dims", s);
+        EXPECT_TRUE(tres.is_ok());
+        auto d = std::move(tres.value());
+        std::vector<std::vector<Value>> rows;
+        rows.reserve(100);
+        for (i32 i = 0; i < 100; ++i)
+            rows.push_back({Value{i}, Value{static_cast<i64>(i) * 10}});
+        EXPECT_TRUE(d.insert_many(rows).is_ok());
+        EXPECT_TRUE(d.flush().is_ok());
+        EXPECT_TRUE(d.fsync().is_ok());
+        return d;
     }
 
     static std::vector<i64> drain_i64(Operator& op, size_t col) {
@@ -496,4 +512,90 @@ TEST_F(PipelineE2ETest, ChainedFilterMixedStrategies) {
     ASSERT_EQ(out.size(), 1000u);
     for (size_t i = 0; i < 1000; ++i)
         EXPECT_EQ(out[i], static_cast<i64>(1000 + i));
+}
+
+TEST_F(PipelineE2ETest, ScanFilterHashJoinSortLimit) {
+    auto t = open_table();
+    auto dims = make_dims_table();
+
+    auto probe_scan = std::make_unique<TableScan>(&t, std::vector<size_t>{0, 1});
+    auto pred =
+        std::make_unique<BinaryOp>(BinaryOpKind::LT, std::make_unique<ColumnRef>(0, TypeId::INT64),
+                                   std::make_unique<Literal>(Value{static_cast<i64>(5000)}));
+    auto filter = std::make_unique<Filter>(std::move(probe_scan), std::move(pred));
+
+    auto build_scan = std::make_unique<TableScan>(&dims, std::vector<size_t>{0, 1});
+    std::vector<std::unique_ptr<Expression>> build_keys;
+    build_keys.push_back(std::make_unique<ColumnRef>(0, TypeId::INT32));
+    std::vector<std::unique_ptr<Expression>> probe_keys;
+    probe_keys.push_back(std::make_unique<ColumnRef>(1, TypeId::INT32));
+    auto join = std::make_unique<HashJoin>(std::move(build_scan), std::move(filter),
+                                           std::move(build_keys), std::move(probe_keys));
+
+    std::vector<SortKey> keys;
+    keys.push_back(SortKey{std::make_unique<ColumnRef>(0, TypeId::INT64), SortDirection::ASC,
+                           NullOrder::LAST});
+    auto sort = std::make_unique<Sort>(std::move(join), std::move(keys));
+
+    Limit limit(std::move(sort), 50);
+
+    ASSERT_TRUE(limit.open().is_ok());
+    std::vector<std::tuple<i64, i32, i32, i64>> got;
+    while (true) {
+        auto n = limit.next();
+        ASSERT_TRUE(n.is_ok());
+        if (!n.value().has_value())
+            break;
+        const Chunk& c = *n.value();
+        for (size_t i = 0; i < c.row_count(); ++i)
+            got.emplace_back(c.column(0).get_i64(i), c.column(1).get_i32(i), c.column(2).get_i32(i),
+                             c.column(3).get_i64(i));
+    }
+    limit.close();
+
+    ASSERT_EQ(got.size(), 50u);
+    for (size_t i = 0; i < 50; ++i) {
+        i64 id = static_cast<i64>(i);
+        i32 cat = static_cast<i32>(i % 100);
+        EXPECT_EQ(std::get<0>(got[i]), id);
+        EXPECT_EQ(std::get<1>(got[i]), cat);
+        EXPECT_EQ(std::get<2>(got[i]), cat);
+        EXPECT_EQ(std::get<3>(got[i]), static_cast<i64>(cat) * 10);
+    }
+}
+
+TEST_F(PipelineE2ETest, JoinConsumesSelectionVectorChunks) {
+    Table t = open_table();
+    Table dims = make_dims_table();
+
+    auto build_and_drain = [&](FilterStrategy s) {
+        auto probe_scan = std::make_unique<TableScan>(&t, std::vector<size_t>{0, 1});
+        auto pred = std::make_unique<BinaryOp>(
+            BinaryOpKind::LT, std::make_unique<ColumnRef>(0, TypeId::INT64),
+            std::make_unique<Literal>(Value{static_cast<i64>(5000)}));
+        auto filter = std::make_unique<Filter>(std::move(probe_scan), std::move(pred), s);
+
+        auto build_scan = std::make_unique<TableScan>(&dims, std::vector<size_t>{0, 1});
+        std::vector<std::unique_ptr<Expression>> build_keys;
+        build_keys.push_back(std::make_unique<ColumnRef>(0, TypeId::INT32));
+        std::vector<std::unique_ptr<Expression>> probe_keys;
+        probe_keys.push_back(std::make_unique<ColumnRef>(1, TypeId::INT32));
+        auto join = std::make_unique<HashJoin>(std::move(build_scan), std::move(filter),
+                                               std::move(build_keys), std::move(probe_keys));
+
+        std::vector<SortKey> keys;
+        keys.push_back(SortKey{std::make_unique<ColumnRef>(0, TypeId::INT64), SortDirection::ASC,
+                               NullOrder::LAST});
+        auto sort = std::make_unique<Sort>(std::move(join), std::move(keys));
+
+        Limit limit(std::move(sort), 100);
+        return drain_i64(limit, 0);
+    };
+
+    auto compact_out = build_and_drain(FilterStrategy::COMPACT);
+    auto sel_out = build_and_drain(FilterStrategy::SELECTION_VECTOR);
+    EXPECT_EQ(compact_out, sel_out);
+    ASSERT_EQ(compact_out.size(), 100u);
+    EXPECT_EQ(compact_out.front(), 0);
+    EXPECT_EQ(compact_out.back(), 99);
 }
