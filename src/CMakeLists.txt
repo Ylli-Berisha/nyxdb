@@ -14,6 +14,7 @@ add_library(nyxdb_core STATIC
     executor/limit.cpp
     executor/selection_vector.cpp
     executor/sort.cpp
+    executor/hash_join.cpp
 )
 
 target_include_directories(nyxdb_core PUBLIC ${CMAKE_SOURCE_DIR}/src)
