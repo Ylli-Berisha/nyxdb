@@ -1,6 +1,7 @@
 #include "executor/chunk.h"
 #include "executor/expression.h"
 #include "executor/filter.h"
+#include "executor/hash_aggregate.h"
 #include "executor/hash_join.h"
 #include "executor/limit.h"
 #include "executor/operator.h"
@@ -598,4 +599,111 @@ TEST_F(PipelineE2ETest, JoinConsumesSelectionVectorChunks) {
     ASSERT_EQ(compact_out.size(), 100u);
     EXPECT_EQ(compact_out.front(), 0);
     EXPECT_EQ(compact_out.back(), 99);
+}
+
+TEST_F(PipelineE2ETest, ScanFilterHashAggregateSortLimit) {
+    auto t = open_table();
+
+    auto scan = std::make_unique<TableScan>(&t, std::vector<size_t>{0, 1, 2});
+    auto pred =
+        std::make_unique<BinaryOp>(BinaryOpKind::LT, std::make_unique<ColumnRef>(0, TypeId::INT64),
+                                   std::make_unique<Literal>(Value{static_cast<i64>(5000)}));
+    auto filter = std::make_unique<Filter>(std::move(scan), std::move(pred));
+
+    std::vector<std::unique_ptr<Expression>> keys;
+    keys.push_back(std::make_unique<ColumnRef>(1, TypeId::INT32));
+
+    std::vector<AggregateSpec> aggs;
+    aggs.push_back(AggregateSpec{AggregateKind::COUNT_STAR, nullptr});
+    aggs.push_back(
+        AggregateSpec{AggregateKind::SUM, std::make_unique<ColumnRef>(0, TypeId::INT64)});
+    aggs.push_back(
+        AggregateSpec{AggregateKind::AVG, std::make_unique<ColumnRef>(2, TypeId::DOUBLE)});
+
+    auto agg = std::make_unique<HashAggregate>(std::move(filter), std::move(keys), std::move(aggs));
+
+    std::vector<SortKey> sort_keys;
+    sort_keys.push_back(SortKey{std::make_unique<ColumnRef>(0, TypeId::INT32), SortDirection::ASC,
+                                NullOrder::LAST});
+    auto sort = std::make_unique<Sort>(std::move(agg), std::move(sort_keys));
+
+    Limit limit(std::move(sort), 10);
+
+    ASSERT_TRUE(limit.open().is_ok());
+    std::vector<std::tuple<i32, i64, i64, f64>> got;
+    while (true) {
+        auto n = limit.next();
+        ASSERT_TRUE(n.is_ok());
+        if (!n.value().has_value())
+            break;
+        const Chunk& c = *n.value();
+        for (size_t i = 0; i < c.row_count(); ++i)
+            got.emplace_back(c.column(0).get_i32(i), c.column(1).get_i64(i), c.column(2).get_i64(i),
+                             c.column(3).get_f64(i));
+    }
+    limit.close();
+
+    ASSERT_EQ(got.size(), 10u);
+    for (size_t i = 0; i < 10; ++i) {
+        i32 c = static_cast<i32>(i);
+        EXPECT_EQ(std::get<0>(got[i]), c);
+        EXPECT_EQ(std::get<1>(got[i]), 50);
+        EXPECT_EQ(std::get<2>(got[i]), static_cast<i64>(50 * c) + 122500);
+        EXPECT_DOUBLE_EQ(std::get<3>(got[i]), 1.5 * c + 3675.25);
+    }
+}
+
+TEST_F(PipelineE2ETest, AggregateConsumesSelectionVectorChunks) {
+    Table t = open_table();
+
+    auto build_and_drain = [&](FilterStrategy s) {
+        auto scan = std::make_unique<TableScan>(&t, std::vector<size_t>{0, 1});
+        auto pred = std::make_unique<BinaryOp>(
+            BinaryOpKind::LT, std::make_unique<ColumnRef>(0, TypeId::INT64),
+            std::make_unique<Literal>(Value{static_cast<i64>(5000)}));
+        auto filter = std::make_unique<Filter>(std::move(scan), std::move(pred), s);
+
+        std::vector<std::unique_ptr<Expression>> keys;
+        keys.push_back(std::make_unique<ColumnRef>(1, TypeId::INT32));
+
+        std::vector<AggregateSpec> aggs;
+        aggs.push_back(AggregateSpec{AggregateKind::COUNT_STAR, nullptr});
+        aggs.push_back(
+            AggregateSpec{AggregateKind::SUM, std::make_unique<ColumnRef>(0, TypeId::INT64)});
+
+        auto agg =
+            std::make_unique<HashAggregate>(std::move(filter), std::move(keys), std::move(aggs));
+
+        std::vector<SortKey> sort_keys;
+        sort_keys.push_back(SortKey{std::make_unique<ColumnRef>(0, TypeId::INT32),
+                                    SortDirection::ASC, NullOrder::LAST});
+        auto sort = std::make_unique<Sort>(std::move(agg), std::move(sort_keys));
+
+        Limit limit(std::move(sort), 50);
+
+        std::vector<std::tuple<i32, i64, i64>> out;
+        EXPECT_TRUE(limit.open().is_ok());
+        while (true) {
+            auto n = limit.next();
+            EXPECT_TRUE(n.is_ok());
+            if (!n.value().has_value())
+                break;
+            const Chunk& c = *n.value();
+            for (size_t i = 0; i < c.row_count(); ++i)
+                out.emplace_back(c.column(0).get_i32(i), c.column(1).get_i64(i),
+                                 c.column(2).get_i64(i));
+        }
+        limit.close();
+        return out;
+    };
+
+    auto compact = build_and_drain(FilterStrategy::COMPACT);
+    auto sel = build_and_drain(FilterStrategy::SELECTION_VECTOR);
+    EXPECT_EQ(compact, sel);
+    ASSERT_EQ(compact.size(), 50u);
+    for (size_t i = 0; i < 50; ++i) {
+        EXPECT_EQ(std::get<0>(compact[i]), static_cast<i32>(i));
+        EXPECT_EQ(std::get<1>(compact[i]), 50);
+        EXPECT_EQ(std::get<2>(compact[i]), static_cast<i64>(50 * i) + 122500);
+    }
 }
