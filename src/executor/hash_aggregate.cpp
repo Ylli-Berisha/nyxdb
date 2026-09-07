@@ -19,6 +19,35 @@ HashAggregate::HashAggregate(std::unique_ptr<Operator> child,
 
     for (const auto& spec : aggregates_) {
         Expression* arg = spec.arg.get();
+
+        if (spec.kind == AggregateKind::AVG) {
+            assert(arg != nullptr);
+            TypeId in = arg->output_type();
+            assert(in == TypeId::INT32 || in == TypeId::INT64 || in == TypeId::DOUBLE);
+            TypeId sum_state = (in == TypeId::INT32) ? TypeId::INT64 : in;
+
+            u32 sum_idx = static_cast<u32>(internal_aggs_.size());
+            internal_aggs_.push_back(InternalAgg{InternalAggKind::SUM, arg, in, sum_state});
+            {
+                ColumnVector c = ColumnVector::make(sum_state, 1, true);
+                c.set_null(0);
+                group_state_cols_.push_back(std::move(c));
+            }
+
+            u32 count_idx = static_cast<u32>(internal_aggs_.size());
+            internal_aggs_.push_back(InternalAgg{InternalAggKind::COUNT, arg, in, TypeId::INT64});
+            {
+                ColumnVector c = ColumnVector::make(TypeId::INT64, 1, false);
+                c.set_i64(0, 0);
+                group_state_cols_.push_back(std::move(c));
+            }
+
+            output_bindings_.push_back(
+                OutputBinding{OutputBinding::Kind::AVG_DIVIDE, TypeId::DOUBLE, sum_idx, count_idx});
+            output_schema_.push_back({"avg", TypeId::DOUBLE, true});
+            continue;
+        }
+
         InternalAgg ia{};
         bool state_nullable = false;
         const char* name = "agg";
@@ -66,7 +95,7 @@ HashAggregate::HashAggregate(std::unique_ptr<Operator> child,
             break;
         }
         case AggregateKind::AVG:
-            assert(false && "AVG lands in commit 3");
+            assert(false && "AVG handled above");
             break;
         }
 
@@ -242,9 +271,29 @@ Chunk HashAggregate::emit_slice_() {
     out_cols.reserve(output_bindings_.size());
     for (size_t c = 0; c < output_bindings_.size(); ++c) {
         const OutputBinding& b = output_bindings_[c];
-        const ColumnVector& src = group_state_cols_[b.state_idx_a];
         bool nullable = output_schema_[c].nullable;
         ColumnVector out = ColumnVector::empty(b.output_type, nullable, n);
+
+        if (b.kind == OutputBinding::Kind::AVG_DIVIDE) {
+            const ColumnVector& sum_col = group_state_cols_[b.state_idx_a];
+            const ColumnVector& count_col = group_state_cols_[b.state_idx_b];
+            for (size_t i = 0; i < n; ++i) {
+                size_t g = emit_cursor_ + i;
+                i64 count = count_col.get_i64(g);
+                if (count == 0) {
+                    out.append_null();
+                } else {
+                    f64 sum_d = (sum_col.type() == TypeId::DOUBLE)
+                                    ? sum_col.get_f64(g)
+                                    : static_cast<f64>(sum_col.get_i64(g));
+                    out.append_f64(sum_d / static_cast<f64>(count));
+                }
+            }
+            out_cols.push_back(std::move(out));
+            continue;
+        }
+
+        const ColumnVector& src = group_state_cols_[b.state_idx_a];
         switch (b.output_type) {
         case TypeId::INT32:
             for (size_t i = 0; i < n; ++i) {

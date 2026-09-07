@@ -358,6 +358,192 @@ TEST_F(HashAggregateTest, MultipleAggregatesTogether) {
     agg.close();
 }
 
+TEST_F(HashAggregateTest, AvgInt64) {
+    std::vector<i64> input = {1, 2, 3, 4, 5};
+    auto t = make_i64_table("t", input);
+
+    auto scan = std::make_unique<TableScan>(&t, std::vector<size_t>{0});
+    std::vector<AggregateSpec> specs;
+    specs.push_back(
+        AggregateSpec{AggregateKind::AVG, std::make_unique<ColumnRef>(0, TypeId::INT64)});
+    HashAggregate agg(std::move(scan), {}, std::move(specs));
+
+    ASSERT_EQ(agg.output_schema().size(), 1u);
+    EXPECT_EQ(agg.output_schema()[0].type, TypeId::DOUBLE);
+    EXPECT_TRUE(agg.output_schema()[0].nullable);
+
+    ASSERT_TRUE(agg.open().is_ok());
+    auto n = agg.next();
+    ASSERT_TRUE(n.is_ok());
+    ASSERT_TRUE(n.value().has_value());
+    const Chunk& c = *n.value();
+    ASSERT_EQ(c.row_count(), 1u);
+    ASSERT_FALSE(c.column(0).is_null(0));
+    EXPECT_DOUBLE_EQ(c.column(0).get_f64(0), 3.0);
+    agg.close();
+}
+
+TEST_F(HashAggregateTest, AvgInt32) {
+    Schema s = {{"v", TypeId::INT32, false}};
+    auto tres = Table::create(TEST_ROOT, "avg32", s);
+    ASSERT_TRUE(tres.is_ok());
+    auto t = std::move(tres.value());
+    std::vector<std::vector<Value>> rows;
+    for (i32 i = 1; i <= 10; ++i)
+        rows.push_back({Value{i}});
+    ASSERT_TRUE(t.insert_many(rows).is_ok());
+
+    auto scan = std::make_unique<TableScan>(&t, std::vector<size_t>{0});
+    std::vector<AggregateSpec> specs;
+    specs.push_back(
+        AggregateSpec{AggregateKind::AVG, std::make_unique<ColumnRef>(0, TypeId::INT32)});
+    HashAggregate agg(std::move(scan), {}, std::move(specs));
+
+    ASSERT_TRUE(agg.open().is_ok());
+    auto n = agg.next();
+    ASSERT_TRUE(n.is_ok());
+    ASSERT_TRUE(n.value().has_value());
+    const Chunk& c = *n.value();
+    ASSERT_EQ(c.row_count(), 1u);
+    EXPECT_DOUBLE_EQ(c.column(0).get_f64(0), 5.5);
+    agg.close();
+}
+
+TEST_F(HashAggregateTest, AvgDouble) {
+    Schema s = {{"v", TypeId::DOUBLE, false}};
+    auto tres = Table::create(TEST_ROOT, "avgd", s);
+    ASSERT_TRUE(tres.is_ok());
+    auto t = std::move(tres.value());
+    std::vector<std::vector<Value>> rows;
+    for (f64 v : {2.0, 4.0, 6.0}) {
+        rows.push_back({Value{v}});
+    }
+    ASSERT_TRUE(t.insert_many(rows).is_ok());
+
+    auto scan = std::make_unique<TableScan>(&t, std::vector<size_t>{0});
+    std::vector<AggregateSpec> specs;
+    specs.push_back(
+        AggregateSpec{AggregateKind::AVG, std::make_unique<ColumnRef>(0, TypeId::DOUBLE)});
+    HashAggregate agg(std::move(scan), {}, std::move(specs));
+
+    ASSERT_TRUE(agg.open().is_ok());
+    auto n = agg.next();
+    ASSERT_TRUE(n.is_ok());
+    ASSERT_TRUE(n.value().has_value());
+    const Chunk& c = *n.value();
+    ASSERT_EQ(c.row_count(), 1u);
+    EXPECT_DOUBLE_EQ(c.column(0).get_f64(0), 4.0);
+    agg.close();
+}
+
+TEST_F(HashAggregateTest, AvgSkipsNulls) {
+    Schema s = {{"v", TypeId::INT64, true}};
+    auto tres = Table::create(TEST_ROOT, "avgnull", s);
+    ASSERT_TRUE(tres.is_ok());
+    auto t = std::move(tres.value());
+    std::vector<std::vector<Value>> rows;
+    rows.push_back({Value{static_cast<i64>(2)}});
+    rows.push_back({Value{std::monostate{}}});
+    rows.push_back({Value{static_cast<i64>(4)}});
+    rows.push_back({Value{std::monostate{}}});
+    rows.push_back({Value{static_cast<i64>(6)}});
+    ASSERT_TRUE(t.insert_many(rows).is_ok());
+
+    auto scan = std::make_unique<TableScan>(&t, std::vector<size_t>{0});
+    std::vector<AggregateSpec> specs;
+    specs.push_back(
+        AggregateSpec{AggregateKind::AVG, std::make_unique<ColumnRef>(0, TypeId::INT64)});
+    HashAggregate agg(std::move(scan), {}, std::move(specs));
+
+    ASSERT_TRUE(agg.open().is_ok());
+    auto n = agg.next();
+    ASSERT_TRUE(n.is_ok());
+    ASSERT_TRUE(n.value().has_value());
+    const Chunk& c = *n.value();
+    ASSERT_EQ(c.row_count(), 1u);
+    EXPECT_DOUBLE_EQ(c.column(0).get_f64(0), 4.0);
+    agg.close();
+}
+
+TEST_F(HashAggregateTest, AvgAllNullsIsNull) {
+    Schema s = {{"v", TypeId::INT64, true}};
+    auto tres = Table::create(TEST_ROOT, "avgan", s);
+    ASSERT_TRUE(tres.is_ok());
+    auto t = std::move(tres.value());
+    std::vector<std::vector<Value>> rows;
+    for (int i = 0; i < 3; ++i)
+        rows.push_back({Value{std::monostate{}}});
+    ASSERT_TRUE(t.insert_many(rows).is_ok());
+
+    auto scan = std::make_unique<TableScan>(&t, std::vector<size_t>{0});
+    std::vector<AggregateSpec> specs;
+    specs.push_back(
+        AggregateSpec{AggregateKind::AVG, std::make_unique<ColumnRef>(0, TypeId::INT64)});
+    HashAggregate agg(std::move(scan), {}, std::move(specs));
+
+    ASSERT_TRUE(agg.open().is_ok());
+    auto n = agg.next();
+    ASSERT_TRUE(n.is_ok());
+    ASSERT_TRUE(n.value().has_value());
+    const Chunk& c = *n.value();
+    ASSERT_EQ(c.row_count(), 1u);
+    EXPECT_TRUE(c.column(0).is_null(0));
+    agg.close();
+}
+
+TEST_F(HashAggregateTest, AvgEmptyIsNull) {
+    Schema s = {{"v", TypeId::INT64, false}};
+    auto tres = Table::create(TEST_ROOT, "avge", s);
+    ASSERT_TRUE(tres.is_ok());
+    auto t = std::move(tres.value());
+
+    auto scan = std::make_unique<TableScan>(&t, std::vector<size_t>{0});
+    std::vector<AggregateSpec> specs;
+    specs.push_back(
+        AggregateSpec{AggregateKind::AVG, std::make_unique<ColumnRef>(0, TypeId::INT64)});
+    HashAggregate agg(std::move(scan), {}, std::move(specs));
+
+    ASSERT_TRUE(agg.open().is_ok());
+    auto n = agg.next();
+    ASSERT_TRUE(n.is_ok());
+    ASSERT_TRUE(n.value().has_value());
+    const Chunk& c = *n.value();
+    ASSERT_EQ(c.row_count(), 1u);
+    EXPECT_TRUE(c.column(0).is_null(0));
+    agg.close();
+}
+
+TEST_F(HashAggregateTest, AvgMixedWithOtherAggregates) {
+    std::vector<i64> input = {2, 4, 6, 8, 10};
+    auto t = make_i64_table("t", input);
+
+    auto scan = std::make_unique<TableScan>(&t, std::vector<size_t>{0});
+    std::vector<AggregateSpec> specs;
+    specs.push_back(AggregateSpec{AggregateKind::COUNT_STAR, nullptr});
+    specs.push_back(
+        AggregateSpec{AggregateKind::AVG, std::make_unique<ColumnRef>(0, TypeId::INT64)});
+    specs.push_back(
+        AggregateSpec{AggregateKind::SUM, std::make_unique<ColumnRef>(0, TypeId::INT64)});
+    HashAggregate agg(std::move(scan), {}, std::move(specs));
+
+    ASSERT_EQ(agg.output_schema().size(), 3u);
+    EXPECT_EQ(agg.output_schema()[0].name, "count_star");
+    EXPECT_EQ(agg.output_schema()[1].name, "avg");
+    EXPECT_EQ(agg.output_schema()[2].name, "sum");
+
+    ASSERT_TRUE(agg.open().is_ok());
+    auto n = agg.next();
+    ASSERT_TRUE(n.is_ok());
+    ASSERT_TRUE(n.value().has_value());
+    const Chunk& c = *n.value();
+    ASSERT_EQ(c.row_count(), 1u);
+    ASSERT_EQ(c.column_count(), 3u);
+    EXPECT_EQ(c.column(0).get_i64(0), 5);
+    EXPECT_DOUBLE_EQ(c.column(1).get_f64(0), 6.0);
+    EXPECT_EQ(c.column(2).get_i64(0), 30);
+    agg.close();
+}
+
 TEST_F(HashAggregateTest, OutputSchemaHasSingleCountColumn) {
     Schema s = {{"v", TypeId::INT64, false}};
     auto tres = Table::create(TEST_ROOT, "schema_check", s);
