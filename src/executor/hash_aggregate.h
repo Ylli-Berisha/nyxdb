@@ -57,10 +57,18 @@ class HashAggregate : public Operator {
         u32 state_idx_b;
     };
 
+    struct Entry {
+        u32 hash;
+        u32 group_idx;
+    };
+
     Result<void> aggregate_all_();
     Chunk emit_slice_();
     void update_state_(size_t agg_idx, u32 group_idx, const std::optional<ColumnVector>& arg_col,
                        u32 arg_row);
+    u32 find_or_create_group_(const std::vector<ColumnVector>& key_cols, u32 row);
+    void append_initial_state_();
+    void resize_table_();
 
     std::unique_ptr<Operator> child_;
     std::vector<std::unique_ptr<Expression>> group_keys_;
@@ -72,6 +80,8 @@ class HashAggregate : public Operator {
 
     std::vector<ColumnVector> group_key_cols_;
     std::vector<ColumnVector> group_state_cols_;
+    std::vector<Entry> table_;
+    u32 mask_ = 0;
     u32 num_groups_ = 0;
 
     bool opened_ = false;
