@@ -59,6 +59,8 @@ class HashAggregate : public Operator {
 
     Result<void> aggregate_all_();
     Chunk emit_slice_();
+    void update_state_(size_t agg_idx, u32 group_idx, const std::optional<ColumnVector>& arg_col,
+                       u32 arg_row);
 
     std::unique_ptr<Operator> child_;
     std::vector<std::unique_ptr<Expression>> group_keys_;
