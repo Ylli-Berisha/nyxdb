@@ -18,6 +18,26 @@ namespace nyx {
 
 class ColumnFile {
   public:
+    class PageHandle {
+      public:
+        PageHandle() = default;
+        PageHandle(BufferPool* pool, PageId id, Page* page);
+        ~PageHandle();
+        PageHandle(const PageHandle&) = delete;
+        PageHandle& operator=(const PageHandle&) = delete;
+        PageHandle(PageHandle&& other) noexcept;
+        PageHandle& operator=(PageHandle&& other) noexcept;
+
+        Page* get() const { return page_; }
+        Page& operator*() const { return *page_; }
+        Page* operator->() const { return page_; }
+
+      private:
+        BufferPool* pool_ = nullptr;
+        PageId id_ = 0;
+        Page* page_ = nullptr;
+    };
+
     static Result<ColumnFile> create(const std::string& path, TypeId type, bool nullable);
     static Result<ColumnFile> open(const std::string& path);
 
@@ -46,7 +66,7 @@ class ColumnFile {
     bool is_null(u64 row_id);
 
     Result<void> scan(std::function<void(const ColumnPage&)> fn);
-    Result<void> read_page(PageId id, Page& out);
+    Result<PageHandle> read_page(PageId id);
 
     Result<void> flush();
     Result<void> fsync();

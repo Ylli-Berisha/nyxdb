@@ -1,6 +1,5 @@
 #include "storage/disk/column_file.h"
 
-#include <cstring>
 #include <stdexcept>
 #include <utility>
 
@@ -8,6 +7,33 @@ namespace nyx {
 
 static constexpr usize POOL_FRESH_CAPACITY = 64;
 static constexpr usize POOL_DIRTY_CAPACITY = 0;
+
+ColumnFile::PageHandle::PageHandle(BufferPool* pool, PageId id, Page* page)
+    : pool_(pool), id_(id), page_(page) {}
+
+ColumnFile::PageHandle::~PageHandle() {
+    if (pool_ != nullptr)
+        (void)pool_->unpin_page(id_, false);
+}
+
+ColumnFile::PageHandle::PageHandle(PageHandle&& other) noexcept
+    : pool_(other.pool_), id_(other.id_), page_(other.page_) {
+    other.pool_ = nullptr;
+    other.page_ = nullptr;
+}
+
+ColumnFile::PageHandle& ColumnFile::PageHandle::operator=(PageHandle&& other) noexcept {
+    if (this != &other) {
+        if (pool_ != nullptr)
+            (void)pool_->unpin_page(id_, false);
+        pool_ = other.pool_;
+        id_ = other.id_;
+        page_ = other.page_;
+        other.pool_ = nullptr;
+        other.page_ = nullptr;
+    }
+    return *this;
+}
 
 ColumnFile::ColumnFile(std::unique_ptr<DiskManager> disk, std::unique_ptr<BufferPool> pool,
                        TypeId type, bool nullable, u16 capacity, Page current, PageId current_id,
@@ -182,12 +208,11 @@ static Result<T> get_typed(ColumnFile& self, u64 row_id, u16 capacity, Getter ge
     PageId page_num = row_id / capacity;
     u16 slot = static_cast<u16>(row_id % capacity);
 
-    Page temp{};
-    auto res = self.read_page(page_num, temp);
-    if (res.is_err())
-        return Result<T>::err(res.error().message);
+    auto h = self.read_page(page_num);
+    if (h.is_err())
+        return Result<T>::err(h.error().message);
 
-    ColumnPage view(temp);
+    ColumnPage view(*h.value());
     return getter(view, slot);
 }
 
@@ -213,39 +238,32 @@ bool ColumnFile::is_null(u64 row_id) {
     if (page_num >= disk_->page_count())
         return false;
 
-    Page temp{};
-    if (read_page(page_num, temp).is_err())
+    auto h = read_page(page_num);
+    if (h.is_err())
         return false;
-    ColumnPage view(temp);
+    ColumnPage view(*h.value());
     return view.is_null(slot);
 }
 
 Result<void> ColumnFile::scan(std::function<void(const ColumnPage&)> fn) {
     u64 total = disk_->page_count();
-    Page temp{};
     for (PageId id = 0; id < total; ++id) {
-        auto res = read_page(id, temp);
-        if (res.is_err())
-            return res;
-        ColumnPage view(temp);
+        auto h = read_page(id);
+        if (h.is_err())
+            return Result<void>::err(h.error().message);
+        ColumnPage view(*h.value());
         fn(view);
     }
     return Result<void>::ok();
 }
 
-Result<void> ColumnFile::read_page(PageId id, Page& out) {
-    if (id == current_page_id_) {
-        out = current_page_;
-        return Result<void>::ok();
-    }
+Result<ColumnFile::PageHandle> ColumnFile::read_page(PageId id) {
+    if (id == current_page_id_)
+        return Result<PageHandle>::ok(PageHandle(nullptr, id, &current_page_));
     auto p = pool_->fetch_page(id);
     if (p.is_err())
-        return Result<void>::err(p.error().message);
-    std::memcpy(&out, p.value(), sizeof(Page));
-    auto unpin = pool_->unpin_page(id, false);
-    if (unpin.is_err())
-        return unpin;
-    return Result<void>::ok();
+        return Result<PageHandle>::err(p.error().message);
+    return Result<PageHandle>::ok(PageHandle(pool_.get(), id, p.value()));
 }
 
 Result<void> ColumnFile::flush() {
