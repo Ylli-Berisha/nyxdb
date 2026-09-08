@@ -6,14 +6,13 @@
 namespace nyx {
 
 static constexpr usize POOL_FRESH_CAPACITY = 64;
-static constexpr usize POOL_DIRTY_CAPACITY = 0;
 
 ColumnFile::PageHandle::PageHandle(BufferPool* pool, PageId id, Page* page)
     : pool_(pool), id_(id), page_(page) {}
 
 ColumnFile::PageHandle::~PageHandle() {
     if (pool_ != nullptr)
-        (void)pool_->unpin_page(id_, false);
+        (void)pool_->unpin_page(id_);
 }
 
 ColumnFile::PageHandle::PageHandle(PageHandle&& other) noexcept
@@ -25,7 +24,7 @@ ColumnFile::PageHandle::PageHandle(PageHandle&& other) noexcept
 ColumnFile::PageHandle& ColumnFile::PageHandle::operator=(PageHandle&& other) noexcept {
     if (this != &other) {
         if (pool_ != nullptr)
-            (void)pool_->unpin_page(id_, false);
+            (void)pool_->unpin_page(id_);
         pool_ = other.pool_;
         id_ = other.id_;
         page_ = other.page_;
@@ -61,7 +60,7 @@ Result<ColumnFile> ColumnFile::create(const std::string& path, TypeId type, bool
         page.reset(id_res.value());
         ColumnPage::init(page, type, nullable);
 
-        auto pool = std::make_unique<BufferPool>(POOL_FRESH_CAPACITY, POOL_DIRTY_CAPACITY, *disk);
+        auto pool = std::make_unique<BufferPool>(POOL_FRESH_CAPACITY, *disk);
 
         return Result<ColumnFile>::ok(ColumnFile(std::move(disk), std::move(pool), type, nullable,
                                                  capacity, std::move(page), id_res.value(), true));
@@ -90,7 +89,7 @@ Result<ColumnFile> ColumnFile::open(const std::string& path) {
         if (type_size(type) == 0)
             return Result<ColumnFile>::err("open: page header has invalid type");
 
-        auto pool = std::make_unique<BufferPool>(POOL_FRESH_CAPACITY, POOL_DIRTY_CAPACITY, *disk);
+        auto pool = std::make_unique<BufferPool>(POOL_FRESH_CAPACITY, *disk);
 
         return Result<ColumnFile>::ok(ColumnFile(std::move(disk), std::move(pool), type, nullable,
                                                  capacity, std::move(page), last, false));
