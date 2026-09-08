@@ -1,14 +1,19 @@
 #include "storage/disk/column_file.h"
 
+#include <cstring>
 #include <stdexcept>
 #include <utility>
 
 namespace nyx {
 
-ColumnFile::ColumnFile(std::unique_ptr<DiskManager> disk, TypeId type, bool nullable, u16 capacity,
-                       Page current, PageId current_id, bool current_dirty)
-    : disk_(std::move(disk)), type_(type), nullable_(nullable), capacity_(capacity),
-      current_page_(std::move(current)), current_page_id_(current_id),
+static constexpr usize POOL_FRESH_CAPACITY = 64;
+static constexpr usize POOL_DIRTY_CAPACITY = 0;
+
+ColumnFile::ColumnFile(std::unique_ptr<DiskManager> disk, std::unique_ptr<BufferPool> pool,
+                       TypeId type, bool nullable, u16 capacity, Page current, PageId current_id,
+                       bool current_dirty)
+    : disk_(std::move(disk)), pool_(std::move(pool)), type_(type), nullable_(nullable),
+      capacity_(capacity), current_page_(std::move(current)), current_page_id_(current_id),
       current_dirty_(current_dirty) {}
 
 Result<ColumnFile> ColumnFile::create(const std::string& path, TypeId type, bool nullable) {
@@ -30,8 +35,10 @@ Result<ColumnFile> ColumnFile::create(const std::string& path, TypeId type, bool
         page.reset(id_res.value());
         ColumnPage::init(page, type, nullable);
 
-        return Result<ColumnFile>::ok(ColumnFile(std::move(disk), type, nullable, capacity,
-                                                 std::move(page), id_res.value(), true));
+        auto pool = std::make_unique<BufferPool>(POOL_FRESH_CAPACITY, POOL_DIRTY_CAPACITY, *disk);
+
+        return Result<ColumnFile>::ok(ColumnFile(std::move(disk), std::move(pool), type, nullable,
+                                                 capacity, std::move(page), id_res.value(), true));
     } catch (const std::exception& e) {
         return Result<ColumnFile>::err(e.what());
     }
@@ -57,8 +64,10 @@ Result<ColumnFile> ColumnFile::open(const std::string& path) {
         if (type_size(type) == 0)
             return Result<ColumnFile>::err("open: page header has invalid type");
 
-        return Result<ColumnFile>::ok(
-            ColumnFile(std::move(disk), type, nullable, capacity, std::move(page), last, false));
+        auto pool = std::make_unique<BufferPool>(POOL_FRESH_CAPACITY, POOL_DIRTY_CAPACITY, *disk);
+
+        return Result<ColumnFile>::ok(ColumnFile(std::move(disk), std::move(pool), type, nullable,
+                                                 capacity, std::move(page), last, false));
     } catch (const std::exception& e) {
         return Result<ColumnFile>::err(e.what());
     }
@@ -169,41 +178,31 @@ Result<void> ColumnFile::append_bulk(const std::vector<Value>& values) {
 }
 
 template <typename T, typename Getter>
-static Result<T> get_typed(ColumnFile& self, u64 row_id, u16 capacity, PageId current_page_id,
-                           Page& current_page, DiskManager& disk, Getter getter) {
+static Result<T> get_typed(ColumnFile& self, u64 row_id, u16 capacity, Getter getter) {
     PageId page_num = row_id / capacity;
     u16 slot = static_cast<u16>(row_id % capacity);
 
-    if (page_num >= disk.page_count())
-        return Result<T>::err("get: row_id " + std::to_string(row_id) + " out of range");
-
-    if (page_num == current_page_id) {
-        ColumnPage view(current_page);
-        return getter(view, slot);
-    }
-
     Page temp{};
-    auto res = disk.read_page(page_num, temp);
+    auto res = self.read_page(page_num, temp);
     if (res.is_err())
         return Result<T>::err(res.error().message);
 
     ColumnPage view(temp);
-    (void)self;
     return getter(view, slot);
 }
 
 Result<i32> ColumnFile::get_i32(u64 row_id) {
-    return get_typed<i32>(*this, row_id, capacity_, current_page_id_, current_page_, *disk_,
+    return get_typed<i32>(*this, row_id, capacity_,
                           [](ColumnPage& v, u16 s) { return v.get_i32(s); });
 }
 
 Result<i64> ColumnFile::get_i64(u64 row_id) {
-    return get_typed<i64>(*this, row_id, capacity_, current_page_id_, current_page_, *disk_,
+    return get_typed<i64>(*this, row_id, capacity_,
                           [](ColumnPage& v, u16 s) { return v.get_i64(s); });
 }
 
 Result<f64> ColumnFile::get_f64(u64 row_id) {
-    return get_typed<f64>(*this, row_id, capacity_, current_page_id_, current_page_, *disk_,
+    return get_typed<f64>(*this, row_id, capacity_,
                           [](ColumnPage& v, u16 s) { return v.get_f64(s); });
 }
 
@@ -214,13 +213,8 @@ bool ColumnFile::is_null(u64 row_id) {
     if (page_num >= disk_->page_count())
         return false;
 
-    if (page_num == current_page_id_) {
-        ColumnPage view(current_page_);
-        return view.is_null(slot);
-    }
-
     Page temp{};
-    if (disk_->read_page(page_num, temp).is_err())
+    if (read_page(page_num, temp).is_err())
         return false;
     ColumnPage view(temp);
     return view.is_null(slot);
@@ -230,16 +224,11 @@ Result<void> ColumnFile::scan(std::function<void(const ColumnPage&)> fn) {
     u64 total = disk_->page_count();
     Page temp{};
     for (PageId id = 0; id < total; ++id) {
-        if (id == current_page_id_) {
-            ColumnPage view(current_page_);
-            fn(view);
-        } else {
-            auto res = disk_->read_page(id, temp);
-            if (res.is_err())
-                return res;
-            ColumnPage view(temp);
-            fn(view);
-        }
+        auto res = read_page(id, temp);
+        if (res.is_err())
+            return res;
+        ColumnPage view(temp);
+        fn(view);
     }
     return Result<void>::ok();
 }
@@ -249,7 +238,14 @@ Result<void> ColumnFile::read_page(PageId id, Page& out) {
         out = current_page_;
         return Result<void>::ok();
     }
-    return disk_->read_page(id, out);
+    auto p = pool_->fetch_page(id);
+    if (p.is_err())
+        return Result<void>::err(p.error().message);
+    std::memcpy(&out, p.value(), sizeof(Page));
+    auto unpin = pool_->unpin_page(id, false);
+    if (unpin.is_err())
+        return unpin;
+    return Result<void>::ok();
 }
 
 Result<void> ColumnFile::flush() {

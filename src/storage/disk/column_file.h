@@ -7,6 +7,7 @@
 #include "storage/disk/page.h"
 #include "storage/disk/type_id.h"
 #include "storage/disk/value.h"
+#include "storage/memory/buffer_pool.h"
 
 #include <functional>
 #include <memory>
@@ -51,13 +52,14 @@ class ColumnFile {
     Result<void> fsync();
 
   private:
-    ColumnFile(std::unique_ptr<DiskManager> disk, TypeId type, bool nullable, u16 capacity,
-               Page current, PageId current_id, bool current_dirty);
+    ColumnFile(std::unique_ptr<DiskManager> disk, std::unique_ptr<BufferPool> pool, TypeId type,
+               bool nullable, u16 capacity, Page current, PageId current_id, bool current_dirty);
 
     Result<void> ensure_room_for_append();
     Result<void> rotate_page();
 
     std::unique_ptr<DiskManager> disk_;
+    std::unique_ptr<BufferPool> pool_;
     TypeId type_;
     bool nullable_;
     u16 capacity_;
