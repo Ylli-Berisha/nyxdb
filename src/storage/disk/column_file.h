@@ -9,6 +9,7 @@
 #include "storage/disk/value.h"
 
 #include <functional>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -29,7 +30,7 @@ class ColumnFile {
     bool nullable() const { return nullable_; }
     u16 page_capacity() const { return capacity_; }
     u64 row_count() const;
-    const std::string& path() const { return disk_.path(); }
+    const std::string& path() const { return disk_->path(); }
 
     Result<void> append_i32(i32 v);
     Result<void> append_i64(i64 v);
@@ -50,13 +51,13 @@ class ColumnFile {
     Result<void> fsync();
 
   private:
-    ColumnFile(DiskManager disk, TypeId type, bool nullable, u16 capacity, Page current,
-               PageId current_id, bool current_dirty);
+    ColumnFile(std::unique_ptr<DiskManager> disk, TypeId type, bool nullable, u16 capacity,
+               Page current, PageId current_id, bool current_dirty);
 
     Result<void> ensure_room_for_append();
     Result<void> rotate_page();
 
-    DiskManager disk_;
+    std::unique_ptr<DiskManager> disk_;
     TypeId type_;
     bool nullable_;
     u16 capacity_;
