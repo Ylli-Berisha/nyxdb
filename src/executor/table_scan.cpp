@@ -209,16 +209,15 @@ Result<ColumnVector> TableScan::read_column_range(size_t col_idx, u64 start, siz
     u64 cursor = start;
     size_t out_offset = 0;
 
-    Page page_buf{};
     while (remaining > 0) {
         PageId page_id = static_cast<PageId>(cursor / capacity);
         u16 slot_in_page = static_cast<u16>(cursor % capacity);
 
-        auto rp = cf.read_page(page_id, page_buf);
+        auto rp = cf.read_page(page_id);
         if (rp.is_err())
             return Result<ColumnVector>::err(rp.error().message);
 
-        const ColumnPage view(page_buf);
+        const ColumnPage view(*rp.value());
         u16 avail = static_cast<u16>(view.value_count() - slot_in_page);
         u16 take = static_cast<u16>(std::min<u64>(avail, remaining));
 

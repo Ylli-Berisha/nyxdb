@@ -7,8 +7,10 @@
 #include "storage/disk/page.h"
 #include "storage/disk/type_id.h"
 #include "storage/disk/value.h"
+#include "storage/memory/buffer_pool.h"
 
 #include <functional>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -16,6 +18,26 @@ namespace nyx {
 
 class ColumnFile {
   public:
+    class PageHandle {
+      public:
+        PageHandle() = default;
+        PageHandle(BufferPool* pool, PageId id, Page* page);
+        ~PageHandle();
+        PageHandle(const PageHandle&) = delete;
+        PageHandle& operator=(const PageHandle&) = delete;
+        PageHandle(PageHandle&& other) noexcept;
+        PageHandle& operator=(PageHandle&& other) noexcept;
+
+        Page* get() const { return page_; }
+        Page& operator*() const { return *page_; }
+        Page* operator->() const { return page_; }
+
+      private:
+        BufferPool* pool_ = nullptr;
+        PageId id_ = 0;
+        Page* page_ = nullptr;
+    };
+
     static Result<ColumnFile> create(const std::string& path, TypeId type, bool nullable);
     static Result<ColumnFile> open(const std::string& path);
 
@@ -29,7 +51,7 @@ class ColumnFile {
     bool nullable() const { return nullable_; }
     u16 page_capacity() const { return capacity_; }
     u64 row_count() const;
-    const std::string& path() const { return disk_.path(); }
+    const std::string& path() const { return disk_->path(); }
 
     Result<void> append_i32(i32 v);
     Result<void> append_i64(i64 v);
@@ -44,19 +66,20 @@ class ColumnFile {
     bool is_null(u64 row_id);
 
     Result<void> scan(std::function<void(const ColumnPage&)> fn);
-    Result<void> read_page(PageId id, Page& out);
+    Result<PageHandle> read_page(PageId id);
 
     Result<void> flush();
     Result<void> fsync();
 
   private:
-    ColumnFile(DiskManager disk, TypeId type, bool nullable, u16 capacity, Page current,
-               PageId current_id, bool current_dirty);
+    ColumnFile(std::unique_ptr<DiskManager> disk, std::unique_ptr<BufferPool> pool, TypeId type,
+               bool nullable, u16 capacity, Page current, PageId current_id, bool current_dirty);
 
     Result<void> ensure_room_for_append();
     Result<void> rotate_page();
 
-    DiskManager disk_;
+    std::unique_ptr<DiskManager> disk_;
+    std::unique_ptr<BufferPool> pool_;
     TypeId type_;
     bool nullable_;
     u16 capacity_;
