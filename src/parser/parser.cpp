@@ -1,5 +1,7 @@
 #include "parser/parser.h"
 
+#include "parser/parse_error.h"
+
 #include <cstdlib>
 #include <optional>
 #include <string>
@@ -82,7 +84,7 @@ bool Parser::match_(TokenKind kind) {
 }
 
 std::string Parser::err_msg_(const std::string& msg, const Token& tok) const {
-    return "parse error at offset " + std::to_string(tok.loc.offset) + ": " + msg;
+    return render_parse_error(source_, tok.loc, msg);
 }
 
 Result<ast::ExprPtr> Parser::parse_expression() {
@@ -252,37 +254,55 @@ Result<ast::ExprPtr> Parser::parse_ident_or_call_() {
         ast::make_expr(ast::ColumnRef{std::nullopt, ident.text, ident.loc}));
 }
 
-Result<ast::Statement> Parser::parse_statement() {
-    ast::Statement stmt;
+Result<ast::Statement> Parser::parse_one_statement_() {
     switch (peek_().kind) {
     case TokenKind::KW_SELECT: {
         auto r = parse_select_();
         if (r.is_err())
             return Result<ast::Statement>::err(r.error().message);
-        stmt = ast::Statement{std::move(r.value())};
-        break;
+        return Result<ast::Statement>::ok(ast::Statement{std::move(r.value())});
     }
     case TokenKind::KW_CREATE: {
         auto r = parse_create_table_();
         if (r.is_err())
             return Result<ast::Statement>::err(r.error().message);
-        stmt = ast::Statement{std::move(r.value())};
-        break;
+        return Result<ast::Statement>::ok(ast::Statement{std::move(r.value())});
     }
     case TokenKind::KW_INSERT: {
         auto r = parse_insert_();
         if (r.is_err())
             return Result<ast::Statement>::err(r.error().message);
-        stmt = ast::Statement{std::move(r.value())};
-        break;
+        return Result<ast::Statement>::ok(ast::Statement{std::move(r.value())});
     }
     default:
         return Result<ast::Statement>::err(err_msg_("expected statement", peek_()));
     }
+}
+
+Result<ast::Statement> Parser::parse_statement() {
+    auto r = parse_one_statement_();
+    if (r.is_err())
+        return r;
     match_(TokenKind::SEMICOLON);
     if (peek_().kind != TokenKind::END_OF_FILE)
         return Result<ast::Statement>::err(err_msg_("unexpected token after statement", peek_()));
-    return Result<ast::Statement>::ok(std::move(stmt));
+    return r;
+}
+
+Result<std::vector<ast::Statement>> Parser::parse() {
+    std::vector<ast::Statement> stmts;
+    while (peek_().kind != TokenKind::END_OF_FILE) {
+        auto r = parse_one_statement_();
+        if (r.is_err())
+            return Result<std::vector<ast::Statement>>::err(r.error().message);
+        stmts.push_back(std::move(r.value()));
+        if (peek_().kind == TokenKind::END_OF_FILE)
+            break;
+        if (!match_(TokenKind::SEMICOLON))
+            return Result<std::vector<ast::Statement>>::err(
+                err_msg_("expected ';' between statements", peek_()));
+    }
+    return Result<std::vector<ast::Statement>>::ok(std::move(stmts));
 }
 
 Result<ast::SelectStmt> Parser::parse_select_() {

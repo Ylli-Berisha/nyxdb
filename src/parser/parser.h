@@ -16,6 +16,7 @@ class Parser {
 
     Result<ast::ExprPtr> parse_expression();
     Result<ast::Statement> parse_statement();
+    Result<std::vector<ast::Statement>> parse();
 
   private:
     const Token& peek_(usize ahead = 0) const;
@@ -37,6 +38,8 @@ class Parser {
     Result<ast::CreateTableStmt> parse_create_table_();
     Result<ast::ColumnDef> parse_column_def_();
     Result<ast::InsertStmt> parse_insert_();
+
+    Result<ast::Statement> parse_one_statement_();
 
     std::string err_msg_(const std::string& msg, const Token& tok) const;
 

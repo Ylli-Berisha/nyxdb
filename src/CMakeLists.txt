@@ -19,6 +19,7 @@ add_library(nyxdb_core STATIC
     executor/hash_aggregate.cpp
     parser/lexer.cpp
     parser/parser.cpp
+    parser/parse_error.cpp
 )
 
 target_include_directories(nyxdb_core PUBLIC ${CMAKE_SOURCE_DIR}/src)
