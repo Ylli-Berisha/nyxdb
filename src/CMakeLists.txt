@@ -20,6 +20,7 @@ add_library(nyxdb_core STATIC
     parser/lexer.cpp
     parser/parser.cpp
     parser/parse_error.cpp
+    catalog/catalog.cpp
 )
 
 target_include_directories(nyxdb_core PUBLIC ${CMAKE_SOURCE_DIR}/src)
