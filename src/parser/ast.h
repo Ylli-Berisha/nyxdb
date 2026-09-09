@@ -115,6 +115,23 @@ struct SelectStmt {
     std::optional<i64> offset;
 };
 
-using Statement = std::variant<SelectStmt>;
+struct ColumnDef {
+    std::string name;
+    TypeId type;
+    bool nullable = true;
+};
+
+struct CreateTableStmt {
+    std::string table_name;
+    std::vector<ColumnDef> columns;
+};
+
+struct InsertStmt {
+    std::string table_name;
+    std::vector<std::string> columns;
+    std::vector<std::vector<ExprPtr>> rows;
+};
+
+using Statement = std::variant<SelectStmt, CreateTableStmt, InsertStmt>;
 
 } // namespace nyx::ast

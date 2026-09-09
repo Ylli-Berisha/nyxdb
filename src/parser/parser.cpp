@@ -253,15 +253,36 @@ Result<ast::ExprPtr> Parser::parse_ident_or_call_() {
 }
 
 Result<ast::Statement> Parser::parse_statement() {
-    if (peek_().kind != TokenKind::KW_SELECT)
+    ast::Statement stmt;
+    switch (peek_().kind) {
+    case TokenKind::KW_SELECT: {
+        auto r = parse_select_();
+        if (r.is_err())
+            return Result<ast::Statement>::err(r.error().message);
+        stmt = ast::Statement{std::move(r.value())};
+        break;
+    }
+    case TokenKind::KW_CREATE: {
+        auto r = parse_create_table_();
+        if (r.is_err())
+            return Result<ast::Statement>::err(r.error().message);
+        stmt = ast::Statement{std::move(r.value())};
+        break;
+    }
+    case TokenKind::KW_INSERT: {
+        auto r = parse_insert_();
+        if (r.is_err())
+            return Result<ast::Statement>::err(r.error().message);
+        stmt = ast::Statement{std::move(r.value())};
+        break;
+    }
+    default:
         return Result<ast::Statement>::err(err_msg_("expected statement", peek_()));
-    auto r = parse_select_();
-    if (r.is_err())
-        return Result<ast::Statement>::err(r.error().message);
+    }
     match_(TokenKind::SEMICOLON);
     if (peek_().kind != TokenKind::END_OF_FILE)
         return Result<ast::Statement>::err(err_msg_("unexpected token after statement", peek_()));
-    return Result<ast::Statement>::ok(ast::Statement{std::move(r.value())});
+    return Result<ast::Statement>::ok(std::move(stmt));
 }
 
 Result<ast::SelectStmt> Parser::parse_select_() {
@@ -434,6 +455,116 @@ Result<ast::TableRef> Parser::parse_table_ref_() {
         ref.loc = combine_loc(ref.loc, alias_tok.loc);
     }
     return Result<ast::TableRef>::ok(std::move(ref));
+}
+
+Result<ast::CreateTableStmt> Parser::parse_create_table_() {
+    if (!match_(TokenKind::KW_CREATE))
+        return Result<ast::CreateTableStmt>::err(err_msg_("expected CREATE", peek_()));
+    if (!match_(TokenKind::KW_TABLE))
+        return Result<ast::CreateTableStmt>::err(err_msg_("expected TABLE", peek_()));
+    if (peek_().kind != TokenKind::IDENTIFIER)
+        return Result<ast::CreateTableStmt>::err(err_msg_("expected table name", peek_()));
+    const Token& name_tok = consume_();
+
+    ast::CreateTableStmt stmt;
+    stmt.table_name = name_tok.text;
+
+    if (!match_(TokenKind::LPAREN))
+        return Result<ast::CreateTableStmt>::err(err_msg_("expected '('", peek_()));
+    while (true) {
+        auto col = parse_column_def_();
+        if (col.is_err())
+            return Result<ast::CreateTableStmt>::err(col.error().message);
+        stmt.columns.push_back(std::move(col.value()));
+        if (!match_(TokenKind::COMMA))
+            break;
+    }
+    if (!match_(TokenKind::RPAREN))
+        return Result<ast::CreateTableStmt>::err(err_msg_("expected ')'", peek_()));
+    return Result<ast::CreateTableStmt>::ok(std::move(stmt));
+}
+
+Result<ast::ColumnDef> Parser::parse_column_def_() {
+    if (peek_().kind != TokenKind::IDENTIFIER)
+        return Result<ast::ColumnDef>::err(err_msg_("expected column name", peek_()));
+    const Token& name_tok = consume_();
+
+    ast::ColumnDef def;
+    def.name = name_tok.text;
+    def.nullable = true;
+
+    switch (peek_().kind) {
+    case TokenKind::KW_INT:
+    case TokenKind::KW_INTEGER:
+        def.type = TypeId::INT32;
+        consume_();
+        break;
+    case TokenKind::KW_BIGINT:
+        def.type = TypeId::INT64;
+        consume_();
+        break;
+    case TokenKind::KW_DOUBLE:
+        def.type = TypeId::DOUBLE;
+        consume_();
+        break;
+    default:
+        return Result<ast::ColumnDef>::err(err_msg_("expected column type", peek_()));
+    }
+
+    if (match_(TokenKind::KW_NOT)) {
+        if (!match_(TokenKind::KW_NULL))
+            return Result<ast::ColumnDef>::err(err_msg_("expected NULL after NOT", peek_()));
+        def.nullable = false;
+    }
+    return Result<ast::ColumnDef>::ok(std::move(def));
+}
+
+Result<ast::InsertStmt> Parser::parse_insert_() {
+    if (!match_(TokenKind::KW_INSERT))
+        return Result<ast::InsertStmt>::err(err_msg_("expected INSERT", peek_()));
+    if (!match_(TokenKind::KW_INTO))
+        return Result<ast::InsertStmt>::err(err_msg_("expected INTO", peek_()));
+    if (peek_().kind != TokenKind::IDENTIFIER)
+        return Result<ast::InsertStmt>::err(err_msg_("expected table name", peek_()));
+    const Token& name_tok = consume_();
+
+    ast::InsertStmt stmt;
+    stmt.table_name = name_tok.text;
+
+    if (match_(TokenKind::LPAREN)) {
+        while (true) {
+            if (peek_().kind != TokenKind::IDENTIFIER)
+                return Result<ast::InsertStmt>::err(err_msg_("expected column name", peek_()));
+            stmt.columns.push_back(consume_().text);
+            if (!match_(TokenKind::COMMA))
+                break;
+        }
+        if (!match_(TokenKind::RPAREN))
+            return Result<ast::InsertStmt>::err(err_msg_("expected ')'", peek_()));
+    }
+
+    if (!match_(TokenKind::KW_VALUES))
+        return Result<ast::InsertStmt>::err(err_msg_("expected VALUES", peek_()));
+
+    while (true) {
+        if (!match_(TokenKind::LPAREN))
+            return Result<ast::InsertStmt>::err(err_msg_("expected '('", peek_()));
+        std::vector<ast::ExprPtr> row;
+        while (true) {
+            auto e = parse_expr_();
+            if (e.is_err())
+                return Result<ast::InsertStmt>::err(e.error().message);
+            row.push_back(std::move(e.value()));
+            if (!match_(TokenKind::COMMA))
+                break;
+        }
+        if (!match_(TokenKind::RPAREN))
+            return Result<ast::InsertStmt>::err(err_msg_("expected ')'", peek_()));
+        stmt.rows.push_back(std::move(row));
+        if (!match_(TokenKind::COMMA))
+            break;
+    }
+    return Result<ast::InsertStmt>::ok(std::move(stmt));
 }
 
 } // namespace nyx

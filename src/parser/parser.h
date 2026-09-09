@@ -34,6 +34,9 @@ class Parser {
     Result<ast::JoinClause> parse_join_clause_();
     Result<ast::OrderByItem> parse_order_by_item_();
     Result<i64> parse_int_literal_(const std::string& what);
+    Result<ast::CreateTableStmt> parse_create_table_();
+    Result<ast::ColumnDef> parse_column_def_();
+    Result<ast::InsertStmt> parse_insert_();
 
     std::string err_msg_(const std::string& msg, const Token& tok) const;
 
