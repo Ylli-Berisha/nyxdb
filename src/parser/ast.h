@@ -81,4 +81,24 @@ template <typename T> ExprPtr make_expr(T&& node) {
     return std::make_unique<Expr>(Expr{std::forward<T>(node)});
 }
 
+struct SelectItem {
+    ExprPtr expr;
+    std::optional<std::string> alias;
+};
+
+struct TableRef {
+    std::string table_name;
+    std::optional<std::string> alias;
+    SourceLoc loc;
+};
+
+struct SelectStmt {
+    std::vector<SelectItem> projections;
+    bool star_projection = false;
+    TableRef from;
+    ExprPtr where;
+};
+
+using Statement = std::variant<SelectStmt>;
+
 } // namespace nyx::ast

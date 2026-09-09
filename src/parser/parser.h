@@ -15,6 +15,7 @@ class Parser {
     Parser(std::string_view source, std::vector<Token> tokens);
 
     Result<ast::ExprPtr> parse_expression();
+    Result<ast::Statement> parse_statement();
 
   private:
     const Token& peek_(usize ahead = 0) const;
@@ -27,7 +28,11 @@ class Parser {
     Result<ast::ExprPtr> parse_primary_();
     Result<ast::ExprPtr> parse_ident_or_call_();
 
-    Result<ast::ExprPtr> err_(const std::string& msg, const Token& tok) const;
+    Result<ast::SelectStmt> parse_select_();
+    Result<ast::SelectItem> parse_select_item_();
+    Result<ast::TableRef> parse_table_ref_();
+
+    std::string err_msg_(const std::string& msg, const Token& tok) const;
 
     std::string_view source_;
     std::vector<Token> tokens_;

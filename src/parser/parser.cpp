@@ -81,9 +81,8 @@ bool Parser::match_(TokenKind kind) {
     return true;
 }
 
-Result<ast::ExprPtr> Parser::err_(const std::string& msg, const Token& tok) const {
-    return Result<ast::ExprPtr>::err("parse error at offset " + std::to_string(tok.loc.offset) +
-                                     ": " + msg);
+std::string Parser::err_msg_(const std::string& msg, const Token& tok) const {
+    return "parse error at offset " + std::to_string(tok.loc.offset) + ": " + msg;
 }
 
 Result<ast::ExprPtr> Parser::parse_expression() {
@@ -91,7 +90,7 @@ Result<ast::ExprPtr> Parser::parse_expression() {
     if (r.is_err())
         return r;
     if (peek_().kind != TokenKind::END_OF_FILE)
-        return err_("unexpected token after expression", peek_());
+        return Result<ast::ExprPtr>::err(err_msg_("unexpected token after expression", peek_()));
     return r;
 }
 
@@ -122,7 +121,7 @@ Result<ast::ExprPtr> Parser::parse_binary_(int min_prec) {
             consume_();
             bool is_not = match_(TokenKind::KW_NOT);
             if (peek_().kind != TokenKind::KW_NULL)
-                return err_("expected NULL after IS", peek_());
+                return Result<ast::ExprPtr>::err(err_msg_("expected NULL after IS", peek_()));
             const Token& null_tok = consume_();
             SourceLoc combined = combine_loc(ast::expr_loc(*left), null_tok.loc);
             NullCheckKind k = is_not ? NullCheckKind::IS_NOT_NULL : NullCheckKind::IS_NULL;
@@ -201,13 +200,13 @@ Result<ast::ExprPtr> Parser::parse_primary_() {
         if (r.is_err())
             return r;
         if (!match_(TokenKind::RPAREN))
-            return err_("expected ')'", peek_());
+            return Result<ast::ExprPtr>::err(err_msg_("expected ')'", peek_()));
         return r;
     }
     case TokenKind::IDENTIFIER:
         return parse_ident_or_call_();
     default:
-        return err_("expected expression", tok);
+        return Result<ast::ExprPtr>::err(err_msg_("expected expression", tok));
     }
 }
 
@@ -217,7 +216,7 @@ Result<ast::ExprPtr> Parser::parse_ident_or_call_() {
     if (peek_().kind == TokenKind::DOT) {
         consume_();
         if (peek_().kind != TokenKind::IDENTIFIER)
-            return err_("expected identifier after '.'", peek_());
+            return Result<ast::ExprPtr>::err(err_msg_("expected identifier after '.'", peek_()));
         Token col = consume_();
         SourceLoc combined = combine_loc(ident.loc, col.loc);
         return Result<ast::ExprPtr>::ok(ast::make_expr(
@@ -242,7 +241,7 @@ Result<ast::ExprPtr> Parser::parse_ident_or_call_() {
             }
         }
         if (peek_().kind != TokenKind::RPAREN)
-            return err_("expected ')'", peek_());
+            return Result<ast::ExprPtr>::err(err_msg_("expected ')'", peek_()));
         Token rparen = consume_();
         SourceLoc combined = combine_loc(ident.loc, rparen.loc);
         return Result<ast::ExprPtr>::ok(
@@ -251,6 +250,97 @@ Result<ast::ExprPtr> Parser::parse_ident_or_call_() {
 
     return Result<ast::ExprPtr>::ok(
         ast::make_expr(ast::ColumnRef{std::nullopt, ident.text, ident.loc}));
+}
+
+Result<ast::Statement> Parser::parse_statement() {
+    if (peek_().kind != TokenKind::KW_SELECT)
+        return Result<ast::Statement>::err(err_msg_("expected statement", peek_()));
+    auto r = parse_select_();
+    if (r.is_err())
+        return Result<ast::Statement>::err(r.error().message);
+    match_(TokenKind::SEMICOLON);
+    if (peek_().kind != TokenKind::END_OF_FILE)
+        return Result<ast::Statement>::err(err_msg_("unexpected token after statement", peek_()));
+    return Result<ast::Statement>::ok(ast::Statement{std::move(r.value())});
+}
+
+Result<ast::SelectStmt> Parser::parse_select_() {
+    if (!match_(TokenKind::KW_SELECT))
+        return Result<ast::SelectStmt>::err(err_msg_("expected SELECT", peek_()));
+
+    ast::SelectStmt stmt;
+
+    if (peek_().kind == TokenKind::STAR) {
+        consume_();
+        stmt.star_projection = true;
+    } else {
+        while (true) {
+            auto item = parse_select_item_();
+            if (item.is_err())
+                return Result<ast::SelectStmt>::err(item.error().message);
+            stmt.projections.push_back(std::move(item.value()));
+            if (!match_(TokenKind::COMMA))
+                break;
+        }
+    }
+
+    if (!match_(TokenKind::KW_FROM))
+        return Result<ast::SelectStmt>::err(err_msg_("expected FROM", peek_()));
+
+    auto table = parse_table_ref_();
+    if (table.is_err())
+        return Result<ast::SelectStmt>::err(table.error().message);
+    stmt.from = std::move(table.value());
+
+    if (match_(TokenKind::KW_WHERE)) {
+        auto expr = parse_expr_();
+        if (expr.is_err())
+            return Result<ast::SelectStmt>::err(expr.error().message);
+        stmt.where = std::move(expr.value());
+    }
+
+    return Result<ast::SelectStmt>::ok(std::move(stmt));
+}
+
+Result<ast::SelectItem> Parser::parse_select_item_() {
+    auto e = parse_expr_();
+    if (e.is_err())
+        return Result<ast::SelectItem>::err(e.error().message);
+
+    ast::SelectItem item;
+    item.expr = std::move(e.value());
+
+    if (match_(TokenKind::KW_AS)) {
+        if (peek_().kind != TokenKind::IDENTIFIER)
+            return Result<ast::SelectItem>::err(err_msg_("expected alias after AS", peek_()));
+        item.alias = consume_().text;
+    } else if (peek_().kind == TokenKind::IDENTIFIER) {
+        item.alias = consume_().text;
+    }
+    return Result<ast::SelectItem>::ok(std::move(item));
+}
+
+Result<ast::TableRef> Parser::parse_table_ref_() {
+    if (peek_().kind != TokenKind::IDENTIFIER)
+        return Result<ast::TableRef>::err(err_msg_("expected table name", peek_()));
+    const Token& name_tok = consume_();
+
+    ast::TableRef ref;
+    ref.table_name = name_tok.text;
+    ref.loc = name_tok.loc;
+
+    if (match_(TokenKind::KW_AS)) {
+        if (peek_().kind != TokenKind::IDENTIFIER)
+            return Result<ast::TableRef>::err(err_msg_("expected alias after AS", peek_()));
+        const Token& alias_tok = consume_();
+        ref.alias = alias_tok.text;
+        ref.loc = combine_loc(ref.loc, alias_tok.loc);
+    } else if (peek_().kind == TokenKind::IDENTIFIER) {
+        const Token& alias_tok = consume_();
+        ref.alias = alias_tok.text;
+        ref.loc = combine_loc(ref.loc, alias_tok.loc);
+    }
+    return Result<ast::TableRef>::ok(std::move(ref));
 }
 
 } // namespace nyx
