@@ -292,6 +292,13 @@ Result<ast::SelectStmt> Parser::parse_select_() {
         return Result<ast::SelectStmt>::err(table.error().message);
     stmt.from = std::move(table.value());
 
+    while (peek_().kind == TokenKind::KW_INNER || peek_().kind == TokenKind::KW_JOIN) {
+        auto j = parse_join_clause_();
+        if (j.is_err())
+            return Result<ast::SelectStmt>::err(j.error().message);
+        stmt.joins.push_back(std::move(j.value()));
+    }
+
     if (match_(TokenKind::KW_WHERE)) {
         auto expr = parse_expr_();
         if (expr.is_err())
@@ -299,7 +306,93 @@ Result<ast::SelectStmt> Parser::parse_select_() {
         stmt.where = std::move(expr.value());
     }
 
+    if (match_(TokenKind::KW_GROUP)) {
+        if (!match_(TokenKind::KW_BY))
+            return Result<ast::SelectStmt>::err(err_msg_("expected BY after GROUP", peek_()));
+        while (true) {
+            auto e = parse_expr_();
+            if (e.is_err())
+                return Result<ast::SelectStmt>::err(e.error().message);
+            stmt.group_by.push_back(std::move(e.value()));
+            if (!match_(TokenKind::COMMA))
+                break;
+        }
+    }
+
+    if (match_(TokenKind::KW_HAVING)) {
+        auto e = parse_expr_();
+        if (e.is_err())
+            return Result<ast::SelectStmt>::err(e.error().message);
+        stmt.having = std::move(e.value());
+    }
+
+    if (match_(TokenKind::KW_ORDER)) {
+        if (!match_(TokenKind::KW_BY))
+            return Result<ast::SelectStmt>::err(err_msg_("expected BY after ORDER", peek_()));
+        while (true) {
+            auto item = parse_order_by_item_();
+            if (item.is_err())
+                return Result<ast::SelectStmt>::err(item.error().message);
+            stmt.order_by.push_back(std::move(item.value()));
+            if (!match_(TokenKind::COMMA))
+                break;
+        }
+    }
+
+    if (match_(TokenKind::KW_LIMIT)) {
+        auto n = parse_int_literal_("LIMIT");
+        if (n.is_err())
+            return Result<ast::SelectStmt>::err(n.error().message);
+        stmt.limit = n.value();
+    }
+
+    if (match_(TokenKind::KW_OFFSET)) {
+        auto n = parse_int_literal_("OFFSET");
+        if (n.is_err())
+            return Result<ast::SelectStmt>::err(n.error().message);
+        stmt.offset = n.value();
+    }
+
     return Result<ast::SelectStmt>::ok(std::move(stmt));
+}
+
+Result<ast::JoinClause> Parser::parse_join_clause_() {
+    match_(TokenKind::KW_INNER);
+    if (!match_(TokenKind::KW_JOIN))
+        return Result<ast::JoinClause>::err(err_msg_("expected JOIN", peek_()));
+    auto right = parse_table_ref_();
+    if (right.is_err())
+        return Result<ast::JoinClause>::err(right.error().message);
+    if (!match_(TokenKind::KW_ON))
+        return Result<ast::JoinClause>::err(err_msg_("expected ON after join table", peek_()));
+    auto on = parse_expr_();
+    if (on.is_err())
+        return Result<ast::JoinClause>::err(on.error().message);
+    ast::JoinClause j;
+    j.right = std::move(right.value());
+    j.on = std::move(on.value());
+    return Result<ast::JoinClause>::ok(std::move(j));
+}
+
+Result<ast::OrderByItem> Parser::parse_order_by_item_() {
+    auto e = parse_expr_();
+    if (e.is_err())
+        return Result<ast::OrderByItem>::err(e.error().message);
+    ast::OrderByItem item;
+    item.expr = std::move(e.value());
+    item.ascending = true;
+    if (match_(TokenKind::KW_DESC))
+        item.ascending = false;
+    else
+        match_(TokenKind::KW_ASC);
+    return Result<ast::OrderByItem>::ok(std::move(item));
+}
+
+Result<i64> Parser::parse_int_literal_(const std::string& what) {
+    if (peek_().kind != TokenKind::INT_LITERAL)
+        return Result<i64>::err(err_msg_("expected integer after " + what, peek_()));
+    const Token& tok = consume_();
+    return Result<i64>::ok(std::strtoll(tok.text.c_str(), nullptr, 10));
 }
 
 Result<ast::SelectItem> Parser::parse_select_item_() {

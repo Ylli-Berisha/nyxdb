@@ -31,6 +31,9 @@ class Parser {
     Result<ast::SelectStmt> parse_select_();
     Result<ast::SelectItem> parse_select_item_();
     Result<ast::TableRef> parse_table_ref_();
+    Result<ast::JoinClause> parse_join_clause_();
+    Result<ast::OrderByItem> parse_order_by_item_();
+    Result<i64> parse_int_literal_(const std::string& what);
 
     std::string err_msg_(const std::string& msg, const Token& tok) const;
 

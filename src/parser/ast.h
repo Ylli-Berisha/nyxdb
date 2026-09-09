@@ -92,11 +92,27 @@ struct TableRef {
     SourceLoc loc;
 };
 
+struct JoinClause {
+    TableRef right;
+    ExprPtr on;
+};
+
+struct OrderByItem {
+    ExprPtr expr;
+    bool ascending = true;
+};
+
 struct SelectStmt {
     std::vector<SelectItem> projections;
     bool star_projection = false;
     TableRef from;
+    std::vector<JoinClause> joins;
     ExprPtr where;
+    std::vector<ExprPtr> group_by;
+    ExprPtr having;
+    std::vector<OrderByItem> order_by;
+    std::optional<i64> limit;
+    std::optional<i64> offset;
 };
 
 using Statement = std::variant<SelectStmt>;
