@@ -1,4 +1,4 @@
-#include "parser/parse_error.h"
+#include "common/source_error.h"
 
 namespace nyx {
 
@@ -35,12 +35,14 @@ std::string_view line_at(std::string_view source, u32 offset) {
 
 } // namespace
 
-std::string render_parse_error(std::string_view source, SourceLoc loc, const std::string& message) {
+std::string render_source_error(std::string_view source, SourceLoc loc, const std::string& kind,
+                                const std::string& message) {
     auto [line, col] = line_col(source, loc.offset);
     std::string_view snippet = line_at(source, loc.offset);
 
     std::string out;
-    out += "parse error at line ";
+    out += kind;
+    out += " at line ";
     out += std::to_string(line);
     out += ", col ";
     out += std::to_string(col);
