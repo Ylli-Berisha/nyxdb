@@ -265,6 +265,117 @@ Result<bound::BoundExprPtr> Binder::bind_not_op_(const ast::NotOp& nop) {
     return Result<bound::BoundExprPtr>::ok(bound::make_bound(bound::BoundNotOp{std::move(child)}));
 }
 
+Result<bound::BoundStatement> Binder::bind(const ast::Statement& stmt, std::string_view source) {
+    return std::visit(
+        [&](const auto& s) -> Result<bound::BoundStatement> {
+            using T = std::decay_t<decltype(s)>;
+            if constexpr (std::is_same_v<T, ast::SelectStmt>) {
+                auto r = bind_select(s, source);
+                if (r.is_err())
+                    return Result<bound::BoundStatement>::err(r.error());
+                return Result<bound::BoundStatement>::ok(std::move(r.value()));
+            } else if constexpr (std::is_same_v<T, ast::CreateTableStmt>) {
+                auto r = bind_create_table(s, source);
+                if (r.is_err())
+                    return Result<bound::BoundStatement>::err(r.error());
+                return Result<bound::BoundStatement>::ok(std::move(r.value()));
+            } else if constexpr (std::is_same_v<T, ast::InsertStmt>) {
+                auto r = bind_insert(s, source);
+                if (r.is_err())
+                    return Result<bound::BoundStatement>::err(r.error());
+                return Result<bound::BoundStatement>::ok(std::move(r.value()));
+            }
+        },
+        stmt);
+}
+
+Result<bound::BoundInsert> Binder::bind_insert(const ast::InsertStmt& stmt,
+                                               std::string_view source) {
+    source_ = source;
+
+    const Schema* schema = catalog_.schema_of(stmt.table_name);
+    if (!schema)
+        return Result<bound::BoundInsert>::err(
+            err_msg_("unknown table: " + stmt.table_name, SourceLoc{0, 0}));
+
+    u32 schema_size = static_cast<u32>(schema->size());
+
+    std::vector<u32> target_cols;
+    if (stmt.columns.empty()) {
+        for (u32 i = 0; i < schema_size; ++i)
+            target_cols.push_back(i);
+    } else {
+        std::unordered_set<std::string> seen;
+        for (const auto& col_name : stmt.columns) {
+            if (!seen.insert(col_name).second)
+                return Result<bound::BoundInsert>::err(
+                    err_msg_("duplicate column in INSERT: " + col_name, SourceLoc{0, 0}));
+            bool found = false;
+            for (u32 j = 0; j < schema_size; ++j) {
+                if ((*schema)[j].name == col_name) {
+                    target_cols.push_back(j);
+                    found = true;
+                    break;
+                }
+            }
+            if (!found)
+                return Result<bound::BoundInsert>::err(
+                    err_msg_("unknown column: " + col_name, SourceLoc{0, 0}));
+        }
+    }
+
+    static const std::vector<bound::BoundBinding> no_bindings;
+    bindings_ = &no_bindings;
+
+    std::vector<std::vector<Value>> rows;
+    for (const auto& row_exprs : stmt.rows) {
+        if (row_exprs.size() != target_cols.size())
+            return Result<bound::BoundInsert>::err(
+                err_msg_("arity mismatch: expected " + std::to_string(target_cols.size()) +
+                             " values, got " + std::to_string(row_exprs.size()),
+                         SourceLoc{0, 0}));
+
+        std::vector<Value> schema_row(schema_size, std::monostate{});
+        for (u32 i = 0; i < static_cast<u32>(row_exprs.size()); ++i) {
+            auto bnd = bind_expr_(*row_exprs[i]);
+            if (bnd.is_err())
+                return Result<bound::BoundInsert>::err(bnd.error());
+            auto val = fold_constant_expr_(*bnd.value(), (*schema)[target_cols[i]]);
+            if (val.is_err())
+                return Result<bound::BoundInsert>::err(val.error());
+            schema_row[target_cols[i]] = std::move(val.value());
+        }
+
+        for (u32 i = 0; i < schema_size; ++i) {
+            if (!(*schema)[i].nullable && is_null(schema_row[i]))
+                return Result<bound::BoundInsert>::err(
+                    err_msg_("NULL into NOT NULL column: " + (*schema)[i].name, SourceLoc{0, 0}));
+        }
+
+        rows.push_back(std::move(schema_row));
+    }
+
+    return Result<bound::BoundInsert>::ok({stmt.table_name, std::move(rows)});
+}
+
+Result<Value> Binder::fold_constant_expr_(const bound::BoundExpr& e, const Column& col) {
+    if (const auto* lit = std::get_if<bound::BoundIntLit>(&e.node)) {
+        if (col.type == TypeId::INT64)
+            return Result<Value>::ok(static_cast<i64>(lit->value));
+        if (col.type == TypeId::INT32 && lit->type == TypeId::INT32)
+            return Result<Value>::ok(static_cast<i32>(lit->value));
+        return Result<Value>::err(err_msg_("type mismatch for column: " + col.name, SourceLoc{0, 0}));
+    }
+    if (const auto* lit = std::get_if<bound::BoundDoubleLit>(&e.node)) {
+        if (col.type != TypeId::DOUBLE)
+            return Result<Value>::err(err_msg_("type mismatch for column: " + col.name, SourceLoc{0, 0}));
+        return Result<Value>::ok(lit->value);
+    }
+    if (std::holds_alternative<bound::BoundNullLit>(e.node))
+        return Result<Value>::ok(std::monostate{});
+    return Result<Value>::err(err_msg_("INSERT values must be constants", SourceLoc{0, 0}));
+}
+
 Result<bound::BoundCreateTable> Binder::bind_create_table(const ast::CreateTableStmt& stmt,
                                                           std::string_view source) {
     source_ = source;

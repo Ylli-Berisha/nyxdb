@@ -22,6 +22,8 @@ class Binder {
     Result<bound::BoundSelect> bind_select(const ast::SelectStmt& stmt, std::string_view source);
     Result<bound::BoundCreateTable> bind_create_table(const ast::CreateTableStmt& stmt,
                                                       std::string_view source);
+    Result<bound::BoundInsert> bind_insert(const ast::InsertStmt& stmt, std::string_view source);
+    Result<bound::BoundStatement> bind(const ast::Statement& stmt, std::string_view source);
 
   private:
     Result<bound::BoundExprPtr> bind_expr_(const ast::Expr& e);
@@ -43,6 +45,7 @@ class Binder {
         const std::vector<bound::BoundProjection>& projections);
     bool has_ungrouped_col_(const bound::BoundExpr& e,
                             const std::vector<bound::BoundExprPtr>& group_by) const;
+    Result<Value> fold_constant_expr_(const bound::BoundExpr& e, const Column& col);
 
     void retype_lit_if_possible_(bound::BoundExpr& e, TypeId target);
     std::string err_msg_(const std::string& msg, SourceLoc loc) const;
