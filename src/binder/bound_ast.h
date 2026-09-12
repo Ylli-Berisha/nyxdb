@@ -5,6 +5,7 @@
 #include "executor/hash_aggregate.h"
 #include "parser/source_loc.h"
 #include "storage/disk/schema.h"
+#include "storage/disk/value.h"
 
 #include <memory>
 #include <optional>
@@ -80,6 +81,48 @@ struct BoundBinding {
     std::string alias;
     const Schema* schema;
 };
+
+struct BoundAggregate {
+    AggregateKind kind;
+    BoundExprPtr arg;
+    TypeId output_type;
+};
+
+struct BoundProjection {
+    BoundExprPtr expr;
+    std::optional<std::string> alias;
+};
+
+struct BoundOrderBy {
+    BoundExprPtr expr;
+    bool ascending;
+};
+
+struct BoundSelect {
+    std::vector<BoundBinding> bindings;
+    std::vector<BoundExprPtr> join_predicates;
+    BoundExprPtr where;
+    std::vector<BoundExprPtr> group_by;
+    std::vector<BoundAggregate> aggregates;
+    BoundExprPtr having;
+    std::vector<BoundProjection> projections;
+    std::vector<BoundOrderBy> order_by;
+    std::optional<i64> limit;
+    std::optional<i64> offset;
+    bool is_aggregated = false;
+};
+
+struct BoundCreateTable {
+    std::string table_name;
+    Schema schema;
+};
+
+struct BoundInsert {
+    std::string table_name;
+    std::vector<std::vector<Value>> rows;
+};
+
+using BoundStatement = std::variant<BoundSelect, BoundCreateTable, BoundInsert>;
 
 TypeId bound_expr_type(const BoundExpr& e);
 bool bound_expr_nullable(const BoundExpr& e);

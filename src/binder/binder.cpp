@@ -208,6 +208,74 @@ Result<bound::BoundExprPtr> Binder::bind_not_op_(const ast::NotOp& nop) {
     return Result<bound::BoundExprPtr>::ok(bound::make_bound(bound::BoundNotOp{std::move(child)}));
 }
 
+Result<bound::BoundSelect> Binder::bind_select(const ast::SelectStmt& stmt,
+                                               std::string_view source) {
+    source_ = source;
+    bound::BoundSelect result;
+
+    auto from = bind_table_ref_(stmt.from);
+    if (from.is_err())
+        return Result<bound::BoundSelect>::err(from.error());
+    result.bindings.push_back(std::move(from.value()));
+
+    for (const auto& join : stmt.joins) {
+        auto jb = bind_table_ref_(join.right);
+        if (jb.is_err())
+            return Result<bound::BoundSelect>::err(jb.error());
+        result.bindings.push_back(std::move(jb.value()));
+
+        bindings_ = &result.bindings;
+        auto on = bind_expr_(*join.on);
+        if (on.is_err())
+            return Result<bound::BoundSelect>::err(on.error());
+        result.join_predicates.push_back(std::move(on.value()));
+    }
+
+    bindings_ = &result.bindings;
+    auto projs = bind_projections_(stmt);
+    if (projs.is_err())
+        return Result<bound::BoundSelect>::err(projs.error());
+    result.projections = std::move(projs.value());
+
+    return Result<bound::BoundSelect>::ok(std::move(result));
+}
+
+Result<bound::BoundBinding> Binder::bind_table_ref_(const ast::TableRef& ref) {
+    const Schema* schema = catalog_.schema_of(ref.table_name);
+    if (!schema)
+        return Result<bound::BoundBinding>::err(
+            err_msg_("unknown table: " + ref.table_name, ref.loc));
+    std::string alias = ref.alias.value_or(ref.table_name);
+    return Result<bound::BoundBinding>::ok({ref.table_name, alias, schema});
+}
+
+Result<std::vector<bound::BoundProjection>> Binder::bind_projections_(
+    const ast::SelectStmt& stmt) {
+    std::vector<bound::BoundProjection> result;
+
+    if (stmt.star_projection) {
+        for (u32 b = 0; b < bindings_->size(); ++b) {
+            const auto& binding = (*bindings_)[b];
+            for (u32 c = 0; c < binding.schema->size(); ++c) {
+                const auto& col = (*binding.schema)[c];
+                result.push_back({bound::make_bound(bound::BoundColumnRef{
+                                      bound::BindingRef{b, c, col.type, col.nullable}}),
+                                  std::nullopt});
+            }
+        }
+        return Result<std::vector<bound::BoundProjection>>::ok(std::move(result));
+    }
+
+    for (const auto& item : stmt.projections) {
+        auto er = bind_expr_(*item.expr);
+        if (er.is_err())
+            return Result<std::vector<bound::BoundProjection>>::err(er.error());
+        result.push_back({std::move(er.value()), item.alias});
+    }
+
+    return Result<std::vector<bound::BoundProjection>>::ok(std::move(result));
+}
+
 Result<bound::BoundExprPtr> Binder::bind_null_check_(const ast::NullCheck& nc) {
     auto cr = bind_expr_(*nc.child);
     if (cr.is_err())

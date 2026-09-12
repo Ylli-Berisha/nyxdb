@@ -19,6 +19,8 @@ class Binder {
                                                 const std::vector<bound::BoundBinding>& bindings,
                                                 std::string_view source);
 
+    Result<bound::BoundSelect> bind_select(const ast::SelectStmt& stmt, std::string_view source);
+
   private:
     Result<bound::BoundExprPtr> bind_expr_(const ast::Expr& e);
     Result<bound::BoundExprPtr> bind_int_lit_(const ast::IntLit& lit);
@@ -30,6 +32,9 @@ class Binder {
     Result<bound::BoundExprPtr> bind_logical_op_(const ast::LogicalOp& lop);
     Result<bound::BoundExprPtr> bind_not_op_(const ast::NotOp& nop);
     Result<bound::BoundExprPtr> bind_null_check_(const ast::NullCheck& nc);
+
+    Result<bound::BoundBinding> bind_table_ref_(const ast::TableRef& ref);
+    Result<std::vector<bound::BoundProjection>> bind_projections_(const ast::SelectStmt& stmt);
 
     void retype_lit_if_possible_(bound::BoundExpr& e, TypeId target);
     std::string err_msg_(const std::string& msg, SourceLoc loc) const;
