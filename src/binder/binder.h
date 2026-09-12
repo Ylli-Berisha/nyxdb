@@ -35,12 +35,19 @@ class Binder {
 
     Result<bound::BoundBinding> bind_table_ref_(const ast::TableRef& ref);
     Result<std::vector<bound::BoundProjection>> bind_projections_(const ast::SelectStmt& stmt);
+    Result<bound::BoundExprPtr> bind_aggregate_(const ast::FuncCall& fc);
+    Result<std::vector<bound::BoundOrderBy>> bind_order_by_(
+        const ast::SelectStmt& stmt,
+        const std::vector<bound::BoundProjection>& projections);
+    bool has_ungrouped_col_(const bound::BoundExpr& e,
+                            const std::vector<bound::BoundExprPtr>& group_by) const;
 
     void retype_lit_if_possible_(bound::BoundExpr& e, TypeId target);
     std::string err_msg_(const std::string& msg, SourceLoc loc) const;
 
     Catalog& catalog_;
     const std::vector<bound::BoundBinding>* bindings_ = nullptr;
+    std::vector<bound::BoundAggregate>* aggregates_ = nullptr;
     std::string_view source_;
 };
 

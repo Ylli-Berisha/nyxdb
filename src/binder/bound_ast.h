@@ -47,6 +47,11 @@ struct BoundAggregateRef {
     TypeId type;
 };
 
+struct BoundProjectionRef {
+    u32 proj_idx;
+    TypeId type;
+};
+
 struct BoundBinaryOp {
     BinaryOpKind op;
     BoundExprPtr left;
@@ -72,7 +77,7 @@ struct BoundNullCheck {
 
 struct BoundExpr {
     std::variant<BoundIntLit, BoundDoubleLit, BoundNullLit, BoundColumnRef, BoundAggregateRef,
-                 BoundBinaryOp, BoundLogicalOp, BoundNotOp, BoundNullCheck>
+                 BoundProjectionRef, BoundBinaryOp, BoundLogicalOp, BoundNotOp, BoundNullCheck>
         node;
 };
 

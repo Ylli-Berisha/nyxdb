@@ -31,6 +31,8 @@ TypeId bound_expr_type(const BoundExpr& e) {
                 return n.ref.type;
             else if constexpr (std::is_same_v<T, BoundAggregateRef>)
                 return n.type;
+            else if constexpr (std::is_same_v<T, BoundProjectionRef>)
+                return n.type;
             else if constexpr (std::is_same_v<T, BoundBinaryOp>)
                 return n.result_type;
             else if constexpr (std::is_same_v<T, BoundLogicalOp>)
@@ -57,6 +59,8 @@ bool bound_expr_nullable(const BoundExpr& e) {
                 return n.ref.nullable;
             else if constexpr (std::is_same_v<T, BoundAggregateRef>)
                 return true;
+            else if constexpr (std::is_same_v<T, BoundProjectionRef>)
+                return false;
             else if constexpr (std::is_same_v<T, BoundBinaryOp>)
                 return bound_expr_nullable(*n.left) || bound_expr_nullable(*n.right);
             else if constexpr (std::is_same_v<T, BoundLogicalOp>)

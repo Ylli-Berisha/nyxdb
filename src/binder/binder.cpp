@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <limits>
 #include <type_traits>
+#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 
@@ -106,10 +107,66 @@ Result<bound::BoundExprPtr> Binder::bind_column_ref_(const ast::ColumnRef& ref) 
 
 Result<bound::BoundExprPtr> Binder::bind_func_call_(const ast::FuncCall& fc) {
     if (aggregate_names().count(fc.name) > 0) {
+        if (aggregates_ != nullptr)
+            return bind_aggregate_(fc);
         return Result<bound::BoundExprPtr>::err(
             err_msg_("aggregate function '" + fc.name + "' not allowed here", fc.loc));
     }
     return Result<bound::BoundExprPtr>::err(err_msg_("unknown function: " + fc.name, fc.loc));
+}
+
+Result<bound::BoundExprPtr> Binder::bind_aggregate_(const ast::FuncCall& fc) {
+    AggregateKind kind;
+    TypeId output_type;
+    bound::BoundExprPtr arg;
+
+    if (fc.name == "count") {
+        kind = fc.star ? AggregateKind::COUNT_STAR : AggregateKind::COUNT;
+        output_type = TypeId::INT64;
+        if (!fc.star) {
+            if (fc.args.empty())
+                return Result<bound::BoundExprPtr>::err(
+                    err_msg_("count requires an argument", fc.loc));
+            auto ar = bind_expr_(*fc.args[0]);
+            if (ar.is_err())
+                return ar;
+            arg = std::move(ar.value());
+        }
+    } else if (fc.name == "sum") {
+        if (fc.args.empty())
+            return Result<bound::BoundExprPtr>::err(err_msg_("sum requires an argument", fc.loc));
+        auto ar = bind_expr_(*fc.args[0]);
+        if (ar.is_err())
+            return ar;
+        TypeId t = bound::bound_expr_type(*ar.value());
+        output_type = (t == TypeId::DOUBLE) ? TypeId::DOUBLE : TypeId::INT64;
+        kind = AggregateKind::SUM;
+        arg = std::move(ar.value());
+    } else if (fc.name == "avg") {
+        if (fc.args.empty())
+            return Result<bound::BoundExprPtr>::err(err_msg_("avg requires an argument", fc.loc));
+        auto ar = bind_expr_(*fc.args[0]);
+        if (ar.is_err())
+            return ar;
+        output_type = TypeId::DOUBLE;
+        kind = AggregateKind::AVG;
+        arg = std::move(ar.value());
+    } else {
+        if (fc.args.empty())
+            return Result<bound::BoundExprPtr>::err(
+                err_msg_(fc.name + " requires an argument", fc.loc));
+        auto ar = bind_expr_(*fc.args[0]);
+        if (ar.is_err())
+            return ar;
+        output_type = bound::bound_expr_type(*ar.value());
+        kind = (fc.name == "min") ? AggregateKind::MIN : AggregateKind::MAX;
+        arg = std::move(ar.value());
+    }
+
+    u32 idx = static_cast<u32>(aggregates_->size());
+    aggregates_->push_back({kind, std::move(arg), output_type});
+    return Result<bound::BoundExprPtr>::ok(
+        bound::make_bound(bound::BoundAggregateRef{idx, output_type}));
 }
 
 void Binder::retype_lit_if_possible_(bound::BoundExpr& e, TypeId target) {
@@ -232,12 +289,131 @@ Result<bound::BoundSelect> Binder::bind_select(const ast::SelectStmt& stmt,
     }
 
     bindings_ = &result.bindings;
+
+    if (stmt.where) {
+        auto wr = bind_expr_(*stmt.where);
+        if (wr.is_err())
+            return Result<bound::BoundSelect>::err(wr.error());
+        result.where = std::move(wr.value());
+    }
+
+    for (const auto& gb : stmt.group_by) {
+        auto gr = bind_expr_(*gb);
+        if (gr.is_err())
+            return Result<bound::BoundSelect>::err(gr.error());
+        result.group_by.push_back(std::move(gr.value()));
+    }
+
+    aggregates_ = &result.aggregates;
+
     auto projs = bind_projections_(stmt);
-    if (projs.is_err())
+    if (projs.is_err()) {
+        aggregates_ = nullptr;
         return Result<bound::BoundSelect>::err(projs.error());
+    }
     result.projections = std::move(projs.value());
 
+    if (stmt.having) {
+        auto hr = bind_expr_(*stmt.having);
+        if (hr.is_err()) {
+            aggregates_ = nullptr;
+            return Result<bound::BoundSelect>::err(hr.error());
+        }
+        result.having = std::move(hr.value());
+    }
+
+    aggregates_ = nullptr;
+
+    result.is_aggregated = !result.group_by.empty() || !result.aggregates.empty();
+
+    if (result.is_aggregated) {
+        for (const auto& proj : result.projections) {
+            if (has_ungrouped_col_(*proj.expr, result.group_by)) {
+                return Result<bound::BoundSelect>::err(
+                    err_msg_("non-aggregated column in aggregated query", SourceLoc{0, 0}));
+            }
+        }
+    }
+
+    aggregates_ = &result.aggregates;
+    auto obs = bind_order_by_(stmt, result.projections);
+    aggregates_ = nullptr;
+    if (obs.is_err())
+        return Result<bound::BoundSelect>::err(obs.error());
+    result.order_by = std::move(obs.value());
+
+    result.limit = stmt.limit;
+    result.offset = stmt.offset;
+
     return Result<bound::BoundSelect>::ok(std::move(result));
+}
+
+Result<std::vector<bound::BoundOrderBy>> Binder::bind_order_by_(
+    const ast::SelectStmt& stmt,
+    const std::vector<bound::BoundProjection>& projections) {
+
+    std::unordered_map<std::string, u32> alias_map;
+    for (u32 i = 0; i < projections.size(); ++i) {
+        if (projections[i].alias.has_value())
+            alias_map[*projections[i].alias] = i;
+    }
+
+    std::vector<bound::BoundOrderBy> result;
+    for (const auto& item : stmt.order_by) {
+        if (const auto* col = std::get_if<ast::ColumnRef>(&item.expr->node)) {
+            if (!col->table.has_value()) {
+                auto it = alias_map.find(col->column);
+                if (it != alias_map.end()) {
+                    TypeId t = bound::bound_expr_type(*projections[it->second].expr);
+                    result.push_back(
+                        {bound::make_bound(bound::BoundProjectionRef{it->second, t}),
+                         item.ascending});
+                    continue;
+                }
+            }
+        }
+        auto er = bind_expr_(*item.expr);
+        if (er.is_err())
+            return Result<std::vector<bound::BoundOrderBy>>::err(er.error());
+        result.push_back({std::move(er.value()), item.ascending});
+    }
+
+    return Result<std::vector<bound::BoundOrderBy>>::ok(std::move(result));
+}
+
+bool Binder::has_ungrouped_col_(const bound::BoundExpr& e,
+                                const std::vector<bound::BoundExprPtr>& group_by) const {
+    return std::visit(
+        [&](const auto& n) -> bool {
+            using T = std::decay_t<decltype(n)>;
+            if constexpr (std::is_same_v<T, bound::BoundColumnRef>) {
+                for (const auto& gb : group_by) {
+                    if (const auto* gc = std::get_if<bound::BoundColumnRef>(&gb->node)) {
+                        if (gc->ref.binding_id == n.ref.binding_id &&
+                            gc->ref.column_idx == n.ref.column_idx)
+                            return false;
+                    }
+                }
+                return true;
+            } else if constexpr (std::is_same_v<T, bound::BoundAggregateRef> ||
+                                 std::is_same_v<T, bound::BoundProjectionRef> ||
+                                 std::is_same_v<T, bound::BoundIntLit> ||
+                                 std::is_same_v<T, bound::BoundDoubleLit> ||
+                                 std::is_same_v<T, bound::BoundNullLit>) {
+                return false;
+            } else if constexpr (std::is_same_v<T, bound::BoundBinaryOp>) {
+                return has_ungrouped_col_(*n.left, group_by) ||
+                       has_ungrouped_col_(*n.right, group_by);
+            } else if constexpr (std::is_same_v<T, bound::BoundLogicalOp>) {
+                return has_ungrouped_col_(*n.left, group_by) ||
+                       has_ungrouped_col_(*n.right, group_by);
+            } else if constexpr (std::is_same_v<T, bound::BoundNotOp>) {
+                return has_ungrouped_col_(*n.child, group_by);
+            } else {
+                return has_ungrouped_col_(*n.child, group_by);
+            }
+        },
+        e.node);
 }
 
 Result<bound::BoundBinding> Binder::bind_table_ref_(const ast::TableRef& ref) {
