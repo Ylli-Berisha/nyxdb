@@ -1,6 +1,6 @@
 #include "parser/parser.h"
 
-#include "parser/parse_error.h"
+#include "common/source_error.h"
 
 #include <cstdlib>
 #include <optional>
@@ -84,7 +84,7 @@ bool Parser::match_(TokenKind kind) {
 }
 
 std::string Parser::err_msg_(const std::string& msg, const Token& tok) const {
-    return render_parse_error(source_, tok.loc, msg);
+    return render_source_error(source_, tok.loc, "parse error", msg);
 }
 
 Result<ast::ExprPtr> Parser::parse_expression() {
