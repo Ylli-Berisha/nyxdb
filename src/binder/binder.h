@@ -20,6 +20,8 @@ class Binder {
                                                 std::string_view source);
 
     Result<bound::BoundSelect> bind_select(const ast::SelectStmt& stmt, std::string_view source);
+    Result<bound::BoundCreateTable> bind_create_table(const ast::CreateTableStmt& stmt,
+                                                      std::string_view source);
 
   private:
     Result<bound::BoundExprPtr> bind_expr_(const ast::Expr& e);

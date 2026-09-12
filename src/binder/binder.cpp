@@ -265,6 +265,20 @@ Result<bound::BoundExprPtr> Binder::bind_not_op_(const ast::NotOp& nop) {
     return Result<bound::BoundExprPtr>::ok(bound::make_bound(bound::BoundNotOp{std::move(child)}));
 }
 
+Result<bound::BoundCreateTable> Binder::bind_create_table(const ast::CreateTableStmt& stmt,
+                                                          std::string_view source) {
+    source_ = source;
+    std::unordered_set<std::string> seen;
+    Schema schema;
+    for (const auto& col : stmt.columns) {
+        if (!seen.insert(col.name).second)
+            return Result<bound::BoundCreateTable>::err(
+                err_msg_("duplicate column name: " + col.name, SourceLoc{0, 0}));
+        schema.push_back({col.name, col.type, col.nullable});
+    }
+    return Result<bound::BoundCreateTable>::ok({stmt.table_name, std::move(schema)});
+}
+
 Result<bound::BoundSelect> Binder::bind_select(const ast::SelectStmt& stmt,
                                                std::string_view source) {
     source_ = source;
