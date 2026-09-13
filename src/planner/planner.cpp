@@ -1,6 +1,7 @@
 #include "planner/planner.h"
 
 #include "executor/filter.h"
+#include "executor/hash_join.h"
 #include "executor/limit.h"
 #include "executor/project.h"
 #include "executor/sort.h"
@@ -56,21 +57,143 @@ std::unique_ptr<Expression> Planner::lower_expr_(const bound::BoundExpr& e, cons
         e.node);
 }
 
+static std::pair<Table*, std::unique_ptr<TableScan>> make_scan(Catalog& cat,
+                                                               const bound::BoundBinding& b) {
+    Table* t = cat.table(b.table_name);
+    if (!t)
+        return {nullptr, nullptr};
+    size_t n = b.schema->size();
+    std::vector<size_t> proj(n);
+    std::iota(proj.begin(), proj.end(), 0);
+    return {t, std::make_unique<TableScan>(t, std::move(proj))};
+}
+
 Result<std::unique_ptr<Operator>> Planner::build_scans_(const bound::BoundSelect& stmt,
                                                         ColCtx& ctx) {
-    const auto& binding = stmt.bindings[0];
-    Table* t = catalog_.table(binding.table_name);
-    if (!t)
-        return Result<std::unique_ptr<Operator>>::err("unknown table: " + binding.table_name);
-
-    size_t ncols = binding.schema->size();
-    std::vector<size_t> projected(ncols);
-    std::iota(projected.begin(), projected.end(), 0);
-
     ctx.binding_offsets.resize(stmt.bindings.size(), 0u);
 
+    auto [t0, scan0] = make_scan(catalog_, stmt.bindings[0]);
+    if (!scan0)
+        return Result<std::unique_ptr<Operator>>::err("unknown table: " +
+                                                      stmt.bindings[0].table_name);
+
+    if (stmt.bindings.size() == 1)
+        return Result<std::unique_ptr<Operator>>::ok(std::move(scan0));
+
+    auto [t1, scan1] = make_scan(catalog_, stmt.bindings[1]);
+    if (!scan1)
+        return Result<std::unique_ptr<Operator>>::err("unknown table: " +
+                                                      stmt.bindings[1].table_name);
+
+    u32 ncols0 = static_cast<u32>(stmt.bindings[0].schema->size());
+    u32 ncols1 = static_cast<u32>(stmt.bindings[1].schema->size());
+
+    std::unique_ptr<Operator> op;
+
+    if (t0->row_count() <= t1->row_count()) {
+        ctx.binding_offsets[0] = ncols1;
+        ctx.binding_offsets[1] = 0;
+        auto keys = decompose_on_(*stmt.join_predicates[0], ctx, 0);
+        if (!keys.is_ok())
+            return Result<std::unique_ptr<Operator>>::err(keys.error());
+        auto [pk, bk] = std::move(keys.value());
+        op = std::make_unique<HashJoin>(std::move(scan0), std::move(scan1), std::move(bk),
+                                        std::move(pk));
+    } else {
+        ctx.binding_offsets[0] = 0;
+        ctx.binding_offsets[1] = ncols0;
+        auto keys = decompose_on_(*stmt.join_predicates[0], ctx, 1);
+        if (!keys.is_ok())
+            return Result<std::unique_ptr<Operator>>::err(keys.error());
+        auto [pk, bk] = std::move(keys.value());
+        op = std::make_unique<HashJoin>(std::move(scan1), std::move(scan0), std::move(bk),
+                                        std::move(pk));
+    }
+
+    u32 total_cols = ncols0 + ncols1;
+    for (size_t i = 2; i < stmt.bindings.size(); i++) {
+        auto r = build_join_(std::move(op), stmt.bindings[i], *stmt.join_predicates[i - 1],
+                             static_cast<u32>(i), total_cols, ctx);
+        if (!r.is_ok())
+            return r;
+        total_cols += static_cast<u32>(stmt.bindings[i].schema->size());
+        op = std::move(r.value());
+    }
+
+    return Result<std::unique_ptr<Operator>>::ok(std::move(op));
+}
+
+Result<std::unique_ptr<Operator>> Planner::build_join_(std::unique_ptr<Operator> left,
+                                                       const bound::BoundBinding& right_binding,
+                                                       const bound::BoundExpr& on, u32 right_bid,
+                                                       u32 left_col_count, ColCtx& ctx) {
+    Table* t = catalog_.table(right_binding.table_name);
+    if (!t)
+        return Result<std::unique_ptr<Operator>>::err("unknown table: " + right_binding.table_name);
+
+    size_t ncols = right_binding.schema->size();
+    std::vector<size_t> proj(ncols);
+    std::iota(proj.begin(), proj.end(), 0);
+    auto scan = std::make_unique<TableScan>(t, std::move(proj));
+
+    ctx.binding_offsets[right_bid] = left_col_count;
+
+    auto keys = decompose_on_(on, ctx, right_bid);
+    if (!keys.is_ok())
+        return Result<std::unique_ptr<Operator>>::err(keys.error());
+    auto [pk, bk] = std::move(keys.value());
+
     return Result<std::unique_ptr<Operator>>::ok(
-        std::make_unique<TableScan>(t, std::move(projected)));
+        std::make_unique<HashJoin>(std::move(scan), std::move(left), std::move(bk), std::move(pk)));
+}
+
+Result<Planner::KeyVecs> Planner::decompose_on_(const bound::BoundExpr& on, const ColCtx& ctx,
+                                                u32 build_bid) {
+    if (auto* lop = std::get_if<bound::BoundLogicalOp>(&on.node)) {
+        if (lop->op == LogicalOpKind::AND) {
+            auto lr = decompose_on_(*lop->left, ctx, build_bid);
+            if (!lr.is_ok())
+                return lr;
+            auto rr = decompose_on_(*lop->right, ctx, build_bid);
+            if (!rr.is_ok())
+                return rr;
+            auto [lp, lb] = std::move(lr.value());
+            auto [rp, rb] = std::move(rr.value());
+            for (auto& k : rp)
+                lp.push_back(std::move(k));
+            for (auto& k : rb)
+                lb.push_back(std::move(k));
+            return Result<KeyVecs>::ok({std::move(lp), std::move(lb)});
+        }
+    }
+
+    auto* bop = std::get_if<bound::BoundBinaryOp>(&on.node);
+    if (!bop || bop->op != BinaryOpKind::EQ)
+        return Result<KeyVecs>::err("only equijoin ON predicates supported");
+
+    auto* lcr = std::get_if<bound::BoundColumnRef>(&bop->left->node);
+    auto* rcr = std::get_if<bound::BoundColumnRef>(&bop->right->node);
+    if (!lcr || !rcr)
+        return Result<KeyVecs>::err("only equijoin ON predicates supported");
+
+    const bound::BoundColumnRef* probe_cr;
+    const bound::BoundColumnRef* build_cr;
+    if (lcr->ref.binding_id == build_bid && rcr->ref.binding_id != build_bid) {
+        build_cr = lcr;
+        probe_cr = rcr;
+    } else if (rcr->ref.binding_id == build_bid && lcr->ref.binding_id != build_bid) {
+        build_cr = rcr;
+        probe_cr = lcr;
+    } else {
+        return Result<KeyVecs>::err("ON predicate is not an equijoin");
+    }
+
+    u32 probe_flat = ctx.binding_offsets[probe_cr->ref.binding_id] + probe_cr->ref.column_idx;
+    std::vector<std::unique_ptr<Expression>> probe_keys, build_keys;
+    probe_keys.push_back(std::make_unique<ColumnRef>(probe_flat, probe_cr->ref.type));
+    build_keys.push_back(std::make_unique<ColumnRef>(build_cr->ref.column_idx, build_cr->ref.type));
+
+    return Result<KeyVecs>::ok({std::move(probe_keys), std::move(build_keys)});
 }
 
 std::unique_ptr<Operator> Planner::build_filter_(std::unique_ptr<Operator> child,

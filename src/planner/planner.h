@@ -25,11 +25,19 @@ class Planner {
         std::unordered_map<u64, u32> group_col_map;
     };
 
+    using KeyVecs = std::pair<std::vector<std::unique_ptr<Expression>>,
+                              std::vector<std::unique_ptr<Expression>>>;
+
     std::unique_ptr<Expression>
     lower_expr_(const bound::BoundExpr& e, const ColCtx& ctx,
                 const std::vector<bound::BoundProjection>* projs = nullptr);
 
     Result<std::unique_ptr<Operator>> build_scans_(const bound::BoundSelect& stmt, ColCtx& ctx);
+    Result<std::unique_ptr<Operator>> build_join_(std::unique_ptr<Operator> left,
+                                                  const bound::BoundBinding& right_binding,
+                                                  const bound::BoundExpr& on, u32 right_bid,
+                                                  u32 left_col_count, ColCtx& ctx);
+    Result<KeyVecs> decompose_on_(const bound::BoundExpr& on, const ColCtx& ctx, u32 build_bid);
     std::unique_ptr<Operator> build_filter_(std::unique_ptr<Operator> child,
                                             const bound::BoundExpr& pred, const ColCtx& ctx);
     std::unique_ptr<Operator> build_project_(std::unique_ptr<Operator> child,
