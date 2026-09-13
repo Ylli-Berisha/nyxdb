@@ -24,6 +24,7 @@ add_library(nyxdb_core STATIC
     binder/bound_ast.cpp
     binder/binder.cpp
     frontend/runner.cpp
+    planner/planner.cpp
 )
 
 target_include_directories(nyxdb_core PUBLIC ${CMAKE_SOURCE_DIR}/src)
