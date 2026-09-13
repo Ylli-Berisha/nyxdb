@@ -142,7 +142,7 @@ Result<u64> Table::insert(const std::vector<Value>& row) {
 
 Result<u64> Table::insert_many(const std::vector<std::vector<Value>>& rows) {
     if (rows.empty())
-        return Result<u64>::ok(row_count());
+        return Result<u64>::ok(0);
 
     for (const auto& row : rows) {
         if (row.size() != columns_.size())
@@ -150,8 +150,6 @@ Result<u64> Table::insert_many(const std::vector<std::vector<Value>>& rows) {
                                     " does not match column count " +
                                     std::to_string(columns_.size()));
     }
-
-    u64 starting_row_id = row_count();
 
     std::vector<std::vector<Value>> column_batches(columns_.size());
     for (auto& b : column_batches)
@@ -167,7 +165,7 @@ Result<u64> Table::insert_many(const std::vector<std::vector<Value>>& rows) {
                                     r.error().message);
     }
 
-    return Result<u64>::ok(starting_row_id);
+    return Result<u64>::ok(static_cast<u64>(rows.size()));
 }
 
 Result<void> Table::flush() {

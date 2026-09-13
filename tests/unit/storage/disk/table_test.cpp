@@ -152,7 +152,7 @@ TEST_F(TableTest, InsertManyBasic) {
 
     auto ins = t.insert_many(rows);
     ASSERT_TRUE(ins.is_ok());
-    EXPECT_EQ(ins.value(), 0u);
+    EXPECT_EQ(ins.value(), 100u);
     EXPECT_EQ(t.row_count(), 100u);
 
     for (u64 i = 0; i < 100; ++i) {
