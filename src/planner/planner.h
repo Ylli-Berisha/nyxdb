@@ -33,6 +33,8 @@ class Planner {
                 const std::vector<bound::BoundProjection>* projs = nullptr);
 
     Result<std::unique_ptr<Operator>> build_scans_(const bound::BoundSelect& stmt, ColCtx& ctx);
+    Result<std::unique_ptr<Operator>> build_aggregate_(std::unique_ptr<Operator> child,
+                                                       const bound::BoundSelect& stmt, ColCtx& ctx);
     Result<std::unique_ptr<Operator>> build_join_(std::unique_ptr<Operator> left,
                                                   const bound::BoundBinding& right_binding,
                                                   const bound::BoundExpr& on, u32 right_bid,

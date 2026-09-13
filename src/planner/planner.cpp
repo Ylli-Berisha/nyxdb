@@ -1,6 +1,7 @@
 #include "planner/planner.h"
 
 #include "executor/filter.h"
+#include "executor/hash_aggregate.h"
 #include "executor/hash_join.h"
 #include "executor/limit.h"
 #include "executor/project.h"
@@ -196,6 +197,38 @@ Result<Planner::KeyVecs> Planner::decompose_on_(const bound::BoundExpr& on, cons
     return Result<KeyVecs>::ok({std::move(probe_keys), std::move(build_keys)});
 }
 
+Result<std::unique_ptr<Operator>> Planner::build_aggregate_(std::unique_ptr<Operator> child,
+                                                            const bound::BoundSelect& stmt,
+                                                            ColCtx& ctx) {
+    std::vector<std::unique_ptr<Expression>> group_keys;
+    for (const auto& gb : stmt.group_by)
+        group_keys.push_back(lower_expr_(*gb, ctx));
+
+    std::vector<AggregateSpec> agg_specs;
+    for (const auto& agg : stmt.aggregates) {
+        std::unique_ptr<Expression> arg;
+        if (agg.arg)
+            arg = lower_expr_(*agg.arg, ctx);
+        agg_specs.push_back({agg.kind, std::move(arg)});
+    }
+
+    if (agg_specs.empty())
+        agg_specs.push_back({AggregateKind::COUNT_STAR, nullptr});
+
+    auto op = std::make_unique<HashAggregate>(std::move(child), std::move(group_keys),
+                                              std::move(agg_specs));
+
+    ctx.post_aggregate = true;
+    ctx.num_group_keys = static_cast<u32>(stmt.group_by.size());
+    for (u32 i = 0; i < static_cast<u32>(stmt.group_by.size()); i++) {
+        const auto& cr = std::get<bound::BoundColumnRef>(stmt.group_by[i]->node);
+        u64 key = (u64(cr.ref.binding_id) << 32) | cr.ref.column_idx;
+        ctx.group_col_map[key] = i;
+    }
+
+    return Result<std::unique_ptr<Operator>>::ok(std::move(op));
+}
+
 std::unique_ptr<Operator> Planner::build_filter_(std::unique_ptr<Operator> child,
                                                  const bound::BoundExpr& pred, const ColCtx& ctx) {
     return std::make_unique<Filter>(std::move(child), lower_expr_(pred, ctx));
@@ -248,6 +281,16 @@ Result<std::unique_ptr<Operator>> Planner::plan(const bound::BoundSelect& stmt) 
 
     if (stmt.where)
         op = build_filter_(std::move(op), *stmt.where, ctx);
+
+    if (stmt.is_aggregated) {
+        auto r = build_aggregate_(std::move(op), stmt, ctx);
+        if (!r.is_ok())
+            return r;
+        op = std::move(r.value());
+    }
+
+    if (stmt.having)
+        op = build_filter_(std::move(op), *stmt.having, ctx);
 
     if (!stmt.order_by.empty())
         op = build_sort_(std::move(op), stmt, ctx);
