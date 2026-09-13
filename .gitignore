@@ -2,8 +2,9 @@
 build/
 out/
 
-# Data directory (runtime files, not source)
+# Data directories (runtime files, not source)
 data/
+nyxdb_data/
 
 # Editor
 .vscode/
