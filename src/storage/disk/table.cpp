@@ -168,6 +168,15 @@ Result<u64> Table::insert_many(const std::vector<std::vector<Value>>& rows) {
     return Result<u64>::ok(static_cast<u64>(rows.size()));
 }
 
+Result<void> Table::truncate(u64 target_rows) {
+    for (auto& col : columns_) {
+        auto r = col.truncate(target_rows);
+        if (r.is_err())
+            return r;
+    }
+    return Result<void>::ok();
+}
+
 Result<void> Table::flush() {
     for (auto& col : columns_) {
         auto r = col.flush();

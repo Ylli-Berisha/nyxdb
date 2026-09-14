@@ -73,6 +73,7 @@ class ColumnFile {
     Result<void> scan(std::function<void(const ColumnPage&)> fn);
     Result<PageHandle> read_page(PageId id);
 
+    Result<void> truncate(u64 target_rows);
     Result<void> flush();
     Result<void> fsync();
 

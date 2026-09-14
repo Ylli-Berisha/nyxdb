@@ -55,6 +55,8 @@ class ColumnPage {
     bool nullable() const;
     bool is_full() const;
 
+    void truncate_to(u16 new_count);
+
     Result<void> append_i32(i32 v);
     Result<void> append_i64(i64 v);
     Result<void> append_f64(f64 v);
