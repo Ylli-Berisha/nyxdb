@@ -35,22 +35,23 @@ ColumnFile::PageHandle& ColumnFile::PageHandle::operator=(PageHandle&& other) no
 }
 
 ColumnFile::ColumnFile(std::unique_ptr<DiskManager> disk, std::unique_ptr<BufferPool> pool,
-                       TypeId type, bool nullable, u16 capacity, Page current, PageId current_id,
-                       bool current_dirty)
+                       TypeId type, bool nullable, u16 capacity, u16 max_len, Page current,
+                       PageId current_id, bool current_dirty)
     : disk_(std::move(disk)), pool_(std::move(pool)), type_(type), nullable_(nullable),
-      capacity_(capacity), current_page_(std::move(current)), current_page_id_(current_id),
-      current_dirty_(current_dirty) {}
+      capacity_(capacity), max_len_(max_len), current_page_(std::move(current)),
+      current_page_id_(current_id), current_dirty_(current_dirty) {}
 
-Result<ColumnFile> ColumnFile::create(const std::string& path, TypeId type, bool nullable) {
-    if (type_size(type) == 0)
-        return Result<ColumnFile>::err("create: invalid type");
+Result<ColumnFile> ColumnFile::create(const std::string& path, TypeId type, bool nullable,
+                                      u16 max_len) {
+    if (type_size(type, max_len) == 0)
+        return Result<ColumnFile>::err("create: invalid type or max_len=0 for VARCHAR");
 
     try {
         auto disk = std::make_unique<DiskManager>(path);
         if (disk->page_count() > 0)
             return Result<ColumnFile>::err("create: file " + path + " already has pages");
 
-        u16 capacity = static_cast<u16>(column_page_capacity(type, nullable));
+        u16 capacity = static_cast<u16>(column_page_capacity(type, nullable, max_len));
 
         auto id_res = disk->allocate_page();
         if (id_res.is_err())
@@ -58,12 +59,13 @@ Result<ColumnFile> ColumnFile::create(const std::string& path, TypeId type, bool
 
         Page page{};
         page.reset(id_res.value());
-        ColumnPage::init(page, type, nullable);
+        ColumnPage::init(page, type, nullable, max_len);
 
         auto pool = std::make_unique<BufferPool>(POOL_FRESH_CAPACITY, *disk);
 
         return Result<ColumnFile>::ok(ColumnFile(std::move(disk), std::move(pool), type, nullable,
-                                                 capacity, std::move(page), id_res.value(), true));
+                                                 capacity, max_len, std::move(page), id_res.value(),
+                                                 true));
     } catch (const std::exception& e) {
         return Result<ColumnFile>::err(e.what());
     }
@@ -85,14 +87,15 @@ Result<ColumnFile> ColumnFile::open(const std::string& path) {
         TypeId type = view.type();
         bool nullable = view.nullable();
         u16 capacity = view.capacity();
+        u16 max_len = view.max_len();
 
-        if (type_size(type) == 0)
+        if (type_size(type, max_len) == 0)
             return Result<ColumnFile>::err("open: page header has invalid type");
 
         auto pool = std::make_unique<BufferPool>(POOL_FRESH_CAPACITY, *disk);
 
         return Result<ColumnFile>::ok(ColumnFile(std::move(disk), std::move(pool), type, nullable,
-                                                 capacity, std::move(page), last, false));
+                                                 capacity, max_len, std::move(page), last, false));
     } catch (const std::exception& e) {
         return Result<ColumnFile>::err(e.what());
     }
@@ -113,7 +116,7 @@ Result<void> ColumnFile::rotate_page() {
 
     PageId new_id = disk_->reserve_page_id();
     current_page_.reset(new_id);
-    ColumnPage::init(current_page_, type_, nullable_);
+    ColumnPage::init(current_page_, type_, nullable_, max_len_);
     current_page_id_ = new_id;
     current_dirty_ = true;
     return Result<void>::ok();
@@ -174,6 +177,18 @@ Result<void> ColumnFile::append_null() {
     return Result<void>::ok();
 }
 
+Result<void> ColumnFile::append_str(std::string_view s) {
+    auto r = ensure_room_for_append();
+    if (r.is_err())
+        return r;
+    ColumnPage view(current_page_);
+    auto res = view.append_str(s);
+    if (res.is_err())
+        return res;
+    current_dirty_ = true;
+    return Result<void>::ok();
+}
+
 Result<void> ColumnFile::append_bulk(const std::vector<Value>& values) {
     for (const auto& v : values) {
         auto rr = ensure_room_for_append();
@@ -191,6 +206,8 @@ Result<void> ColumnFile::append_bulk(const std::vector<Value>& values) {
             ar = view.append_i64(std::get<i64>(v));
         } else if (type_ == TypeId::DOUBLE && std::holds_alternative<f64>(v)) {
             ar = view.append_f64(std::get<f64>(v));
+        } else if (type_ == TypeId::VARCHAR && std::holds_alternative<std::string>(v)) {
+            ar = view.append_str(std::get<std::string>(v));
         } else {
             return Result<void>::err("append_bulk: value type does not match column type");
         }
@@ -228,6 +245,16 @@ Result<i64> ColumnFile::get_i64(u64 row_id) {
 Result<f64> ColumnFile::get_f64(u64 row_id) {
     return get_typed<f64>(*this, row_id, capacity_,
                           [](ColumnPage& v, u16 s) { return v.get_f64(s); });
+}
+
+std::string ColumnFile::get_str(u64 row_id) {
+    PageId page_num = row_id / capacity_;
+    u16 slot = static_cast<u16>(row_id % capacity_);
+    auto h = read_page(page_num);
+    if (h.is_err())
+        return {};
+    ColumnPage view(*h.value());
+    return view.get_str(slot);
 }
 
 bool ColumnFile::is_null(u64 row_id) {

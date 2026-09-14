@@ -101,8 +101,10 @@ int main(int argc, char* argv[]) {
     std::string line;
     while (true) {
         std::cout << "nyx> " << std::flush;
-        if (!std::getline(std::cin, line))
+        if (!std::getline(std::cin, line)) {
+            db.flush();
             break;
+        }
 
         auto s = line.find_first_not_of(" \t");
         if (s == std::string::npos)
@@ -113,8 +115,10 @@ int main(int argc, char* argv[]) {
             line = line.substr(0, e + 1);
         if (line.empty())
             continue;
-        if (line == "exit" || line == "quit" || line == "\\q")
+        if (line == "exit" || line == "quit" || line == "\\q") {
+            db.flush();
             break;
+        }
 
         auto r = db.execute(line);
         if (r.is_err()) {

@@ -8,7 +8,7 @@
 namespace nyx {
 namespace SchemaFile {
 
-static constexpr u8 MAGIC[4] = {'N', 'Y', 'X', '1'};
+static constexpr u8 MAGIC[4] = {'N', 'Y', 'X', '2'};
 static constexpr u8 FLAG_NULLABLE = 0x01;
 
 static void put_u16(u8* dst, u16 v) {
@@ -42,6 +42,9 @@ Result<void> write(const std::string& path, const Schema& schema) {
     for (const auto& col : schema) {
         buf.push_back(static_cast<u8>(col.type));
         buf.push_back(col.nullable ? FLAG_NULLABLE : 0);
+        u8 max_len_bytes[2];
+        put_u16(max_len_bytes, col.max_len);
+        buf.insert(buf.end(), max_len_bytes, max_len_bytes + 2);
         u8 name_len[2];
         put_u16(name_len, static_cast<u16>(col.name.size()));
         buf.insert(buf.end(), name_len, name_len + 2);
@@ -85,7 +88,7 @@ Result<Schema> read(const std::string& path) {
     schema.reserve(count);
 
     for (u32 i = 0; i < count; ++i) {
-        u8 col_hdr[4];
+        u8 col_hdr[6];
         n = ::read(fd, col_hdr, sizeof(col_hdr));
         if (n != static_cast<ssize_t>(sizeof(col_hdr))) {
             ::close(fd);
@@ -94,7 +97,8 @@ Result<Schema> read(const std::string& path) {
 
         TypeId type = static_cast<TypeId>(col_hdr[0]);
         bool nullable = (col_hdr[1] & FLAG_NULLABLE) != 0;
-        u16 name_len = read_u16(col_hdr + 2);
+        u16 max_len = read_u16(col_hdr + 2);
+        u16 name_len = read_u16(col_hdr + 4);
 
         std::string name;
         name.resize(name_len);
@@ -104,7 +108,7 @@ Result<Schema> read(const std::string& path) {
             return Result<Schema>::err("schema read: short read on column name");
         }
 
-        schema.push_back({std::move(name), type, nullable});
+        schema.push_back({std::move(name), type, nullable, max_len});
     }
 
     ::close(fd);

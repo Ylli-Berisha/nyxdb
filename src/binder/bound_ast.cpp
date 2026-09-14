@@ -12,6 +12,8 @@ const char* type_name(TypeId t) {
         return "INT64";
     case TypeId::DOUBLE:
         return "DOUBLE";
+    case TypeId::VARCHAR:
+        return "VARCHAR";
     default:
         return "?";
     }
@@ -25,6 +27,8 @@ TypeId bound_expr_type(const BoundExpr& e) {
                 return n.type;
             else if constexpr (std::is_same_v<T, BoundDoubleLit>)
                 return TypeId::DOUBLE;
+            else if constexpr (std::is_same_v<T, BoundStringLit>)
+                return TypeId::VARCHAR;
             else if constexpr (std::is_same_v<T, BoundNullLit>)
                 return n.type;
             else if constexpr (std::is_same_v<T, BoundColumnRef>)
@@ -52,6 +56,8 @@ bool bound_expr_nullable(const BoundExpr& e) {
             if constexpr (std::is_same_v<T, BoundIntLit>)
                 return false;
             else if constexpr (std::is_same_v<T, BoundDoubleLit>)
+                return false;
+            else if constexpr (std::is_same_v<T, BoundStringLit>)
                 return false;
             else if constexpr (std::is_same_v<T, BoundNullLit>)
                 return true;

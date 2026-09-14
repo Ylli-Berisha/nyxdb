@@ -34,6 +34,12 @@ static ColumnVector broadcast_value(const ColumnVector& src, size_t src_row, siz
             out.set_f64(i, v);
         break;
     }
+    case TypeId::VARCHAR: {
+        const std::string& v = src.get_str(src_row);
+        for (size_t i = 0; i < out_size; ++i)
+            out.set_str(i, v);
+        break;
+    }
     default:
         assert(false);
     }
@@ -190,6 +196,19 @@ Chunk NestedLoopJoin::emit_output_slice_() {
                     out.append_null();
                 else
                     out.append_f64(src.get_f64(row));
+            }
+            break;
+        case TypeId::VARCHAR:
+            for (size_t i = 0; i < n; ++i) {
+                const MatchPair& mp = match_pairs_[emit_cursor_ + i];
+                const ColumnVector& src = is_outer
+                                              ? outer_chunks_[mp.outer_chunk].column(src_col_idx)
+                                              : inner_chunk_->column(src_col_idx);
+                size_t row = is_outer ? mp.outer_row : mp.inner_row;
+                if (nullable && src.is_null(row))
+                    out.append_null();
+                else
+                    out.append_str(src.get_str(row));
             }
             break;
         default:

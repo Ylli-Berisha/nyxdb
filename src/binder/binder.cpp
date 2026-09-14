@@ -42,6 +42,8 @@ Result<bound::BoundExprPtr> Binder::bind_expr_(const ast::Expr& e) {
                 return bind_int_lit_(n);
             else if constexpr (std::is_same_v<T, ast::DoubleLit>)
                 return bind_double_lit_(n);
+            else if constexpr (std::is_same_v<T, ast::StringLit>)
+                return bind_string_lit_(n);
             else if constexpr (std::is_same_v<T, ast::NullLit>)
                 return bind_null_lit_(n);
             else if constexpr (std::is_same_v<T, ast::ColumnRef>)
@@ -66,6 +68,10 @@ Result<bound::BoundExprPtr> Binder::bind_int_lit_(const ast::IntLit& lit) {
                    ? TypeId::INT32
                    : TypeId::INT64;
     return Result<bound::BoundExprPtr>::ok(bound::make_bound(bound::BoundIntLit{lit.value, t}));
+}
+
+Result<bound::BoundExprPtr> Binder::bind_string_lit_(const ast::StringLit& lit) {
+    return Result<bound::BoundExprPtr>::ok(bound::make_bound(bound::BoundStringLit{lit.value}));
 }
 
 Result<bound::BoundExprPtr> Binder::bind_double_lit_(const ast::DoubleLit& lit) {
@@ -205,6 +211,21 @@ Result<bound::BoundExprPtr> Binder::bind_binary_op_(const ast::BinaryOp& bop) {
         return Result<bound::BoundExprPtr>::err(err_msg_(
             std::string("type mismatch: ") + bound::type_name(lt) + " vs " + bound::type_name(rt),
             bop.loc));
+    }
+
+    if (lt == TypeId::VARCHAR) {
+        switch (bop.op) {
+        case BinaryOpKind::LT:
+        case BinaryOpKind::LE:
+        case BinaryOpKind::EQ:
+        case BinaryOpKind::GE:
+        case BinaryOpKind::GT:
+        case BinaryOpKind::NE:
+            break;
+        default:
+            return Result<bound::BoundExprPtr>::err(
+                err_msg_("VARCHAR only supports comparison operators", bop.loc));
+        }
     }
 
     TypeId result_type;
@@ -373,6 +394,17 @@ Result<Value> Binder::fold_constant_expr_(const bound::BoundExpr& e, const Colum
                 err_msg_("type mismatch for column: " + col.name, SourceLoc{0, 0}));
         return Result<Value>::ok(lit->value);
     }
+    if (const auto* lit = std::get_if<bound::BoundStringLit>(&e.node)) {
+        if (col.type != TypeId::VARCHAR)
+            return Result<Value>::err(
+                err_msg_("type mismatch for column: " + col.name, SourceLoc{0, 0}));
+        if (lit->value.size() > col.max_len)
+            return Result<Value>::err(err_msg_(
+                "string of length " + std::to_string(lit->value.size()) + " exceeds VARCHAR(" +
+                    std::to_string(col.max_len) + ") for column: " + col.name,
+                SourceLoc{0, 0}));
+        return Result<Value>::ok(lit->value);
+    }
     if (std::holds_alternative<bound::BoundNullLit>(e.node))
         return Result<Value>::ok(std::monostate{});
     return Result<Value>::err(err_msg_("INSERT values must be constants", SourceLoc{0, 0}));
@@ -387,7 +419,7 @@ Result<bound::BoundCreateTable> Binder::bind_create_table(const ast::CreateTable
         if (!seen.insert(col.name).second)
             return Result<bound::BoundCreateTable>::err(
                 err_msg_("duplicate column name: " + col.name, SourceLoc{0, 0}));
-        schema.push_back({col.name, col.type, col.nullable});
+        schema.push_back({col.name, col.type, col.nullable, col.max_len});
     }
     return Result<bound::BoundCreateTable>::ok({stmt.table_name, std::move(schema)});
 }
@@ -525,6 +557,7 @@ bool Binder::has_ungrouped_col_(const bound::BoundExpr& e,
                                  std::is_same_v<T, bound::BoundProjectionRef> ||
                                  std::is_same_v<T, bound::BoundIntLit> ||
                                  std::is_same_v<T, bound::BoundDoubleLit> ||
+                                 std::is_same_v<T, bound::BoundStringLit> ||
                                  std::is_same_v<T, bound::BoundNullLit>) {
                 return false;
             } else if constexpr (std::is_same_v<T, bound::BoundBinaryOp>) {

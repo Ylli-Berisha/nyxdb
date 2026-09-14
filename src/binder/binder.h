@@ -29,6 +29,7 @@ class Binder {
     Result<bound::BoundExprPtr> bind_expr_(const ast::Expr& e);
     Result<bound::BoundExprPtr> bind_int_lit_(const ast::IntLit& lit);
     Result<bound::BoundExprPtr> bind_double_lit_(const ast::DoubleLit& lit);
+    Result<bound::BoundExprPtr> bind_string_lit_(const ast::StringLit& lit);
     Result<bound::BoundExprPtr> bind_null_lit_(const ast::NullLit& lit);
     Result<bound::BoundExprPtr> bind_column_ref_(const ast::ColumnRef& ref);
     Result<bound::BoundExprPtr> bind_func_call_(const ast::FuncCall& fc);

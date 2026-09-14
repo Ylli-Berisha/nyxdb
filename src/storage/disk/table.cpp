@@ -18,7 +18,7 @@ static Result<void> validate_schema(const Schema& schema) {
 
     std::unordered_set<std::string> seen;
     for (const auto& col : schema) {
-        if (type_size(col.type) == 0)
+        if (type_size(col.type, col.max_len) == 0)
             return Result<void>::err("schema column '" + col.name + "' has invalid type");
         if (col.name.empty())
             return Result<void>::err("schema has a column with empty name");
@@ -54,7 +54,7 @@ Result<Table> Table::create(const std::string& data_root, const std::string& nam
 
     for (const auto& col : schema) {
         fs::path col_path = dir_path / (col.name + ".col");
-        auto cf_res = ColumnFile::create(col_path.string(), col.type, col.nullable);
+        auto cf_res = ColumnFile::create(col_path.string(), col.type, col.nullable, col.max_len);
         if (cf_res.is_err()) {
             for (const auto& p : created_paths)
                 fs::remove(p, ec);
@@ -89,7 +89,7 @@ Result<Table> Table::open(const std::string& data_root, const std::string& name)
             return Result<Table>::err("open: " + cf_res.error().message);
 
         ColumnFile cf = std::move(cf_res.value());
-        if (cf.type() != col.type || cf.nullable() != col.nullable)
+        if (cf.type() != col.type || cf.nullable() != col.nullable || cf.max_len() != col.max_len)
             return Result<Table>::err("open: column '" + col.name +
                                       "' file header does not match schema");
         columns.push_back(std::move(cf));

@@ -79,4 +79,13 @@ Result<void> Catalog::add_table(const std::string& name, Schema schema) {
     return Result<void>::ok();
 }
 
+Result<void> Catalog::flush_all() {
+    for (auto& [name, table] : tables_) {
+        auto r = table.flush();
+        if (r.is_err())
+            return Result<void>::err("flush_all: table '" + name + "': " + r.error().message);
+    }
+    return Result<void>::ok();
+}
+
 } // namespace nyx

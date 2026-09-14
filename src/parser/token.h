@@ -11,6 +11,7 @@ enum class TokenKind : u8 {
     // Literals
     INT_LITERAL,
     DOUBLE_LITERAL,
+    STRING_LITERAL,
     IDENTIFIER,
 
     // Punctuation
@@ -64,6 +65,8 @@ enum class TokenKind : u8 {
     KW_INTEGER,
     KW_BIGINT,
     KW_DOUBLE,
+    KW_VARCHAR,
+    KW_NVARCHAR,
 
     END_OF_FILE,
 };

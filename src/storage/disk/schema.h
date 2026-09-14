@@ -13,6 +13,7 @@ struct Column {
     std::string name;
     TypeId type;
     bool nullable;
+    u16 max_len = 0; // VARCHAR only
 };
 
 using Schema = std::vector<Column>;

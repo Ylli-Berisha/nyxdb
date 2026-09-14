@@ -118,7 +118,23 @@ TypeId variant_type(const Value& v) {
         return TypeId::INT64;
     if (std::holds_alternative<f64>(v))
         return TypeId::DOUBLE;
+    if (std::holds_alternative<std::string>(v))
+        return TypeId::VARCHAR;
     return TypeId::INVALID;
+}
+
+template <typename Op>
+ColumnVector str_cmp_kernel(const ColumnVector& l, const ColumnVector& r, Op op) {
+    bool nullable = l.nullable() || r.nullable();
+    size_t n = l.size();
+    ColumnVector out = ColumnVector::make(TypeId::INT32, n, nullable);
+    for (size_t i = 0; i < n; ++i) {
+        if (nullable && (l.is_null(i) || r.is_null(i)))
+            out.set_null(i);
+        else
+            out.set_i32(i, op(l.get_str(i), r.get_str(i)) ? 1 : 0);
+    }
+    return out;
 }
 
 } // namespace
@@ -151,6 +167,10 @@ Result<ColumnVector> Literal::evaluate(const Chunk& input) {
         i64 v = std::get<i64>(value_);
         for (size_t i = 0; i < n; ++i)
             out.set_i64(i, v);
+    } else if (type_ == TypeId::VARCHAR) {
+        const std::string& v = std::get<std::string>(value_);
+        for (size_t i = 0; i < n; ++i)
+            out.set_str(i, v);
     } else {
         f64 v = std::get<f64>(value_);
         for (size_t i = 0; i < n; ++i)
@@ -165,7 +185,9 @@ BinaryOp::BinaryOp(BinaryOpKind op, std::unique_ptr<Expression> left,
       output_type_(is_comparison(op) ? TypeId::INT32 : input_type_) {
     assert(left_->output_type() == right_->output_type());
     assert(input_type_ == TypeId::INT32 || input_type_ == TypeId::INT64 ||
-           input_type_ == TypeId::DOUBLE);
+           input_type_ == TypeId::DOUBLE || input_type_ == TypeId::VARCHAR);
+    if (input_type_ == TypeId::VARCHAR)
+        assert(is_comparison(op_));
 }
 
 Result<ColumnVector> BinaryOp::evaluate(const Chunk& input) {
@@ -186,6 +208,24 @@ Result<ColumnVector> BinaryOp::evaluate(const Chunk& input) {
         return binary_dispatch<i64>(op_, l, r, TypeId::INT64);
     case TypeId::DOUBLE:
         return binary_dispatch<f64>(op_, l, r, TypeId::DOUBLE);
+    case TypeId::VARCHAR:
+        switch (op_) {
+        case BinaryOpKind::LT:
+            return Result<ColumnVector>::ok(str_cmp_kernel(l, r, std::less<std::string>{}));
+        case BinaryOpKind::LE:
+            return Result<ColumnVector>::ok(str_cmp_kernel(l, r, std::less_equal<std::string>{}));
+        case BinaryOpKind::EQ:
+            return Result<ColumnVector>::ok(str_cmp_kernel(l, r, std::equal_to<std::string>{}));
+        case BinaryOpKind::GE:
+            return Result<ColumnVector>::ok(
+                str_cmp_kernel(l, r, std::greater_equal<std::string>{}));
+        case BinaryOpKind::GT:
+            return Result<ColumnVector>::ok(str_cmp_kernel(l, r, std::greater<std::string>{}));
+        case BinaryOpKind::NE:
+            return Result<ColumnVector>::ok(str_cmp_kernel(l, r, std::not_equal_to<std::string>{}));
+        default:
+            return Result<ColumnVector>::err("VARCHAR only supports comparison operators");
+        }
     default:
         return Result<ColumnVector>::err("unsupported input type");
     }
@@ -308,7 +348,7 @@ NullCheckOp::NullCheckOp(NullCheckKind kind, std::unique_ptr<Expression> child)
     assert(child_ != nullptr);
     TypeId t = child_->output_type();
     (void)t;
-    assert(t == TypeId::INT32 || t == TypeId::INT64 || t == TypeId::DOUBLE);
+    assert(t == TypeId::INT32 || t == TypeId::INT64 || t == TypeId::DOUBLE || t == TypeId::VARCHAR);
 }
 
 Result<ColumnVector> NullCheckOp::evaluate(const Chunk& input) {

@@ -93,6 +93,11 @@ static int compare_typed(const ColumnVector& lc, size_t li, const ColumnVector& 
         f64 b = rc.get_f64(ri);
         return (a < b) ? -1 : (a > b) ? 1 : 0;
     }
+    case TypeId::VARCHAR: {
+        const std::string& a = lc.get_str(li);
+        const std::string& b = rc.get_str(ri);
+        return (a < b) ? -1 : (a > b) ? 1 : 0;
+    }
     default:
         assert(false);
         return 0;
@@ -161,6 +166,16 @@ Chunk Sort::emit_slice_(size_t begin, size_t end) {
                     col.append_null();
                 else
                     col.append_f64(src.get_f64(rr.row_idx));
+            }
+            break;
+        case TypeId::VARCHAR:
+            for (size_t i = begin; i < end; ++i) {
+                const RowRef& rr = perm_[i];
+                const ColumnVector& src = buffered_[rr.chunk_idx].column(c);
+                if (nullable && src.is_null(rr.row_idx))
+                    col.append_null();
+                else
+                    col.append_str(src.get_str(rr.row_idx));
             }
             break;
         default:

@@ -153,3 +153,67 @@ TEST(ParserDdlDmlTest, ErrorInsertEmptyRow) {
     auto r = try_parse_statement("INSERT INTO t VALUES ()");
     ASSERT_TRUE(r.is_err());
 }
+
+TEST(ParserDdlDmlTest, CreateTableVarchar) {
+    auto s = parse_stmt("CREATE TABLE t (name VARCHAR(50))");
+    const auto& c = std::get<ast::CreateTableStmt>(s);
+    ASSERT_EQ(c.columns.size(), 1u);
+    EXPECT_EQ(c.columns[0].type, TypeId::VARCHAR);
+    EXPECT_EQ(c.columns[0].max_len, 50u);
+}
+
+TEST(ParserDdlDmlTest, CreateTableNvarchar) {
+    auto s = parse_stmt("CREATE TABLE t (name NVARCHAR(100))");
+    const auto& c = std::get<ast::CreateTableStmt>(s);
+    ASSERT_EQ(c.columns.size(), 1u);
+    EXPECT_EQ(c.columns[0].type, TypeId::VARCHAR);
+    EXPECT_EQ(c.columns[0].max_len, 100u);
+}
+
+TEST(ParserDdlDmlTest, CreateTableVarcharDefaultLen) {
+    auto s = parse_stmt("CREATE TABLE t (name VARCHAR)");
+    const auto& c = std::get<ast::CreateTableStmt>(s);
+    EXPECT_EQ(c.columns[0].type, TypeId::VARCHAR);
+    EXPECT_EQ(c.columns[0].max_len, 255u);
+}
+
+TEST(ParserDdlDmlTest, CreateTableMixedTypes) {
+    auto s = parse_stmt("CREATE TABLE t (name VARCHAR(50), age INT, score DOUBLE)");
+    const auto& c = std::get<ast::CreateTableStmt>(s);
+    ASSERT_EQ(c.columns.size(), 3u);
+    EXPECT_EQ(c.columns[0].type, TypeId::VARCHAR);
+    EXPECT_EQ(c.columns[0].max_len, 50u);
+    EXPECT_EQ(c.columns[1].type, TypeId::INT32);
+    EXPECT_EQ(c.columns[2].type, TypeId::DOUBLE);
+}
+
+TEST(ParserDdlDmlTest, InsertStringLiteral) {
+    auto s = parse_stmt("INSERT INTO t VALUES ('hello', 42)");
+    const auto& i = std::get<ast::InsertStmt>(s);
+    ASSERT_EQ(i.rows.size(), 1u);
+    ASSERT_EQ(i.rows[0].size(), 2u);
+    EXPECT_TRUE(is<ast::StringLit>(*i.rows[0][0]));
+    EXPECT_EQ(as<ast::StringLit>(*i.rows[0][0]).value, "hello");
+    EXPECT_TRUE(is<ast::IntLit>(*i.rows[0][1]));
+}
+
+TEST(ParserDdlDmlTest, InsertStringWithEscapedQuote) {
+    auto s = parse_stmt("INSERT INTO t VALUES ('it''s a test')");
+    const auto& i = std::get<ast::InsertStmt>(s);
+    EXPECT_EQ(as<ast::StringLit>(*i.rows[0][0]).value, "it's a test");
+}
+
+TEST(ParserDdlDmlTest, ErrorVarcharLengthZero) {
+    auto r = try_parse_statement("CREATE TABLE t (name VARCHAR(0))");
+    ASSERT_TRUE(r.is_err());
+}
+
+TEST(ParserDdlDmlTest, WhereStringLiteral) {
+    auto s = parse_stmt("SELECT name FROM t WHERE name = 'Alice'");
+    const auto& sel = std::get<ast::SelectStmt>(s);
+    ASSERT_TRUE(sel.where != nullptr);
+    const auto& bop = as<ast::BinaryOp>(*sel.where);
+    EXPECT_EQ(bop.op, BinaryOpKind::EQ);
+    EXPECT_TRUE(is<ast::StringLit>(*bop.right));
+    EXPECT_EQ(as<ast::StringLit>(*bop.right).value, "Alice");
+}

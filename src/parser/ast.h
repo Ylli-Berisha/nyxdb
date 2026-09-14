@@ -25,6 +25,11 @@ struct DoubleLit {
     SourceLoc loc;
 };
 
+struct StringLit {
+    std::string value;
+    SourceLoc loc;
+};
+
 struct NullLit {
     SourceLoc loc;
 };
@@ -68,8 +73,8 @@ struct NullCheck {
 };
 
 struct Expr {
-    std::variant<IntLit, DoubleLit, NullLit, ColumnRef, FuncCall, BinaryOp, LogicalOp, NotOp,
-                 NullCheck>
+    std::variant<IntLit, DoubleLit, StringLit, NullLit, ColumnRef, FuncCall, BinaryOp, LogicalOp,
+                 NotOp, NullCheck>
         node;
 };
 
@@ -119,6 +124,7 @@ struct ColumnDef {
     std::string name;
     TypeId type;
     bool nullable = true;
+    u16 max_len = 255;
 };
 
 struct CreateTableStmt {

@@ -20,6 +20,7 @@ class Lexer {
     Result<Token> next_token_();
     Result<Token> lex_ident_or_keyword_();
     Result<Token> lex_number_();
+    Result<Token> lex_string_();
     Result<Token> lex_symbol_();
 
     char peek_(usize ahead = 0) const;

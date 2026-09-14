@@ -36,6 +36,8 @@ static bool matches_type(const Value& v, TypeId t) {
         return std::holds_alternative<i64>(v);
     case TypeId::DOUBLE:
         return std::holds_alternative<f64>(v);
+    case TypeId::VARCHAR:
+        return std::holds_alternative<std::string>(v);
     default:
         return false;
     }
@@ -201,12 +203,40 @@ Result<std::vector<ColumnVector>> TableScan::read_projected_columns(u64 start, s
 
 Result<ColumnVector> TableScan::read_column_range(size_t col_idx, u64 start, size_t count) {
     ColumnFile& cf = table_->column(col_idx);
-    ColumnVector out = ColumnVector::make(cf.type(), count, cf.nullable());
-    size_t type_bytes = type_size(cf.type());
     u16 capacity = cf.page_capacity();
-
     u64 remaining = count;
     u64 cursor = start;
+
+    if (cf.type() == TypeId::VARCHAR) {
+        ColumnVector out = ColumnVector::empty(TypeId::VARCHAR, cf.nullable(), count);
+        while (remaining > 0) {
+            PageId page_id = static_cast<PageId>(cursor / capacity);
+            u16 slot_in_page = static_cast<u16>(cursor % capacity);
+
+            auto rp = cf.read_page(page_id);
+            if (rp.is_err())
+                return Result<ColumnVector>::err(rp.error().message);
+
+            const ColumnPage view(*rp.value());
+            u16 avail = static_cast<u16>(view.value_count() - slot_in_page);
+            u16 take = static_cast<u16>(std::min<u64>(avail, remaining));
+
+            for (u16 j = 0; j < take; ++j) {
+                u16 slot = static_cast<u16>(slot_in_page + j);
+                if (cf.nullable() && view.is_null(slot))
+                    out.append_null();
+                else
+                    out.append_str(view.get_str(slot));
+            }
+
+            cursor += take;
+            remaining -= take;
+        }
+        return Result<ColumnVector>::ok(std::move(out));
+    }
+
+    ColumnVector out = ColumnVector::make(cf.type(), count, cf.nullable());
+    size_t type_bytes = type_size(cf.type());
     size_t out_offset = 0;
 
     while (remaining > 0) {

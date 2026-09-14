@@ -21,15 +21,17 @@ static u32 next_pow2(u32 x) {
 }
 
 static u32 hash_row(const std::vector<ColumnVector>& key_cols, size_t row_idx) {
-    byte buf[MAX_COMPOSITE_KEY_BYTES];
-    size_t off = 0;
+    u64 h = 0;
     for (const auto& col : key_cols) {
-        size_t sz = type_size(col.type());
-        assert(off + sz <= MAX_COMPOSITE_KEY_BYTES);
-        std::memcpy(buf + off, col.data() + row_idx * sz, sz);
-        off += sz;
+        if (col.type() == TypeId::VARCHAR) {
+            const std::string& s = col.get_str(row_idx);
+            h = xxhash64(reinterpret_cast<const byte*>(s.data()), s.size(), h);
+        } else {
+            size_t sz = type_size(col.type());
+            h = xxhash64(col.data() + row_idx * sz, sz, h);
+        }
     }
-    return static_cast<u32>(xxhash64(buf, off));
+    return static_cast<u32>(h);
 }
 
 static bool any_key_null(const std::vector<ColumnVector>& key_cols, size_t row_idx) {
@@ -45,9 +47,14 @@ static bool keys_equal(const std::vector<ColumnVector>& lc, size_t li,
     assert(lc.size() == rc.size());
     for (size_t k = 0; k < lc.size(); ++k) {
         assert(lc[k].type() == rc[k].type());
-        size_t sz = type_size(lc[k].type());
-        if (std::memcmp(lc[k].data() + li * sz, rc[k].data() + ri * sz, sz) != 0)
-            return false;
+        if (lc[k].type() == TypeId::VARCHAR) {
+            if (lc[k].get_str(li) != rc[k].get_str(ri))
+                return false;
+        } else {
+            size_t sz = type_size(lc[k].type());
+            if (std::memcmp(lc[k].data() + li * sz, rc[k].data() + ri * sz, sz) != 0)
+                return false;
+        }
     }
     return true;
 }
@@ -65,8 +72,10 @@ HashJoin::HashJoin(std::unique_ptr<Operator> build, std::unique_ptr<Operator> pr
     for (size_t i = 0; i < build_keys_.size(); ++i) {
         TypeId t = build_keys_[i]->output_type();
         assert(t == probe_keys_[i]->output_type());
-        assert(t == TypeId::INT32 || t == TypeId::INT64 || t == TypeId::DOUBLE);
-        total_key_bytes += type_size(t);
+        assert(t == TypeId::INT32 || t == TypeId::INT64 || t == TypeId::DOUBLE ||
+               t == TypeId::VARCHAR);
+        if (t != TypeId::VARCHAR)
+            total_key_bytes += type_size(t);
     }
     assert(total_key_bytes <= MAX_COMPOSITE_KEY_BYTES);
 
@@ -291,6 +300,23 @@ Chunk HashJoin::emit_output_slice_() {
                     out.append_null();
                 else
                     out.append_f64(src.get_f64(row));
+            }
+            break;
+        case TypeId::VARCHAR:
+            for (size_t i = 0; i < n; ++i) {
+                const MatchPair& mp = match_pairs_[emit_cursor_ + i];
+                if (!is_probe && mp.build_chunk == NO_BUILD) {
+                    out.append_null();
+                    continue;
+                }
+                const ColumnVector& src = is_probe
+                                              ? probe_chunk_->column(src_col_idx)
+                                              : build_chunks_[mp.build_chunk].column(src_col_idx);
+                size_t row = is_probe ? mp.probe_row : mp.build_row;
+                if (nullable && src.is_null(row))
+                    out.append_null();
+                else
+                    out.append_str(src.get_str(row));
             }
             break;
         default:

@@ -1,17 +1,20 @@
 #include "storage/disk/column_page.h"
 
 #include <cstring>
+#include <string>
+#include <string_view>
 
 namespace nyx {
 
-void ColumnPage::init(Page& page, TypeId type, bool nullable) {
+void ColumnPage::init(Page& page, TypeId type, bool nullable, u16 max_len) {
     ColumnPageHeader* h = reinterpret_cast<ColumnPageHeader*>(page.payload());
     h->type = type;
     h->flags = nullable ? COL_PAGE_FLAG_NULLABLE : 0;
     h->value_count = 0;
-    h->capacity = static_cast<u16>(column_page_capacity(type, nullable));
+    h->capacity = static_cast<u16>(column_page_capacity(type, nullable, max_len));
     h->null_bitmap_bytes = nullable ? static_cast<u16>((h->capacity + 7) / 8) : 0;
     h->null_count = 0;
+    h->max_len = max_len;
     std::memset(h->min_bytes, 0, sizeof(h->min_bytes));
     std::memset(h->max_bytes, 0, sizeof(h->max_bytes));
     std::memset(h->reserved, 0, sizeof(h->reserved));
@@ -51,6 +54,10 @@ u16 ColumnPage::value_count() const {
 
 u16 ColumnPage::capacity() const {
     return header()->capacity;
+}
+
+u16 ColumnPage::max_len() const {
+    return header()->max_len;
 }
 
 bool ColumnPage::nullable() const {
@@ -214,6 +221,39 @@ std::optional<f64> ColumnPage::min_f64() const {
 }
 std::optional<f64> ColumnPage::max_f64() const {
     return read_max<f64>(header(), TypeId::DOUBLE);
+}
+
+Result<void> ColumnPage::append_str(std::string_view s) {
+    ColumnPageHeader* h = header();
+    if (h->type != TypeId::VARCHAR)
+        return Result<void>::err("append_str: column is not VARCHAR");
+    if (h->value_count >= h->capacity)
+        return Result<void>::err("append_str: page full");
+    u16 max_len = h->max_len;
+    if (s.size() > max_len)
+        return Result<void>::err("string of length " + std::to_string(s.size()) +
+                                 " exceeds VARCHAR(" + std::to_string(max_len) + ")");
+
+    byte* slot = value_area() + static_cast<usize>(h->value_count) * (max_len + 2);
+    u16 len = static_cast<u16>(s.size());
+    std::memcpy(slot, &len, 2);
+    std::memcpy(slot + 2, s.data(), len);
+    if (len < max_len)
+        std::memset(slot + 2 + len, 0, max_len - len);
+
+    if (h->null_bitmap_bytes > 0)
+        clear_null_bit(null_bitmap(), h->value_count);
+    h->value_count++;
+    return Result<void>::ok();
+}
+
+std::string ColumnPage::get_str(u16 slot) const {
+    const ColumnPageHeader* h = header();
+    u16 max_len = h->max_len;
+    const byte* slot_ptr = value_area() + static_cast<usize>(slot) * (max_len + 2);
+    u16 len;
+    std::memcpy(&len, slot_ptr, 2);
+    return std::string(reinterpret_cast<const char*>(slot_ptr + 2), len);
 }
 
 } // namespace nyx

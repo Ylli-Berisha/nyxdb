@@ -276,3 +276,40 @@ TEST(LexerTest, NullIsKeyword) {
     EXPECT_EQ(toks[0].kind, TokenKind::KW_NULL);
     EXPECT_EQ(toks[1].kind, TokenKind::KW_NULL);
 }
+
+TEST(LexerTest, StringLiteralSimple) {
+    auto toks = lex("'hello'");
+    ASSERT_EQ(toks.size(), 2u);
+    EXPECT_EQ(toks[0].kind, TokenKind::STRING_LITERAL);
+    EXPECT_EQ(toks[0].text, "hello");
+}
+
+TEST(LexerTest, StringLiteralEscapedQuote) {
+    auto toks = lex("'it''s'");
+    ASSERT_EQ(toks.size(), 2u);
+    EXPECT_EQ(toks[0].kind, TokenKind::STRING_LITERAL);
+    EXPECT_EQ(toks[0].text, "it's");
+}
+
+TEST(LexerTest, StringLiteralEmpty) {
+    auto toks = lex("''");
+    ASSERT_EQ(toks.size(), 2u);
+    EXPECT_EQ(toks[0].kind, TokenKind::STRING_LITERAL);
+    EXPECT_EQ(toks[0].text, "");
+}
+
+TEST(LexerTest, UnterminatedStringErrors) {
+    Lexer l("'unterminated");
+    auto r = l.tokenize();
+    ASSERT_TRUE(r.is_err());
+    EXPECT_NE(r.error().message.find("unterminated"), std::string::npos);
+}
+
+TEST(LexerTest, VarcharKeyword) {
+    auto toks = lex("VARCHAR NVARCHAR varchar nvarchar");
+    ASSERT_EQ(toks.size(), 5u);
+    EXPECT_EQ(toks[0].kind, TokenKind::KW_VARCHAR);
+    EXPECT_EQ(toks[1].kind, TokenKind::KW_NVARCHAR);
+    EXPECT_EQ(toks[2].kind, TokenKind::KW_VARCHAR);
+    EXPECT_EQ(toks[3].kind, TokenKind::KW_NVARCHAR);
+}

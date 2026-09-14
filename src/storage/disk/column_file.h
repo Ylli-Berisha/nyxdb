@@ -12,6 +12,7 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace nyx {
@@ -38,7 +39,8 @@ class ColumnFile {
         Page* page_ = nullptr;
     };
 
-    static Result<ColumnFile> create(const std::string& path, TypeId type, bool nullable);
+    static Result<ColumnFile> create(const std::string& path, TypeId type, bool nullable,
+                                     u16 max_len = 0);
     static Result<ColumnFile> open(const std::string& path);
 
     ~ColumnFile() = default;
@@ -50,6 +52,7 @@ class ColumnFile {
     TypeId type() const { return type_; }
     bool nullable() const { return nullable_; }
     u16 page_capacity() const { return capacity_; }
+    u16 max_len() const { return max_len_; }
     u64 row_count() const;
     const std::string& path() const { return disk_->path(); }
 
@@ -57,12 +60,14 @@ class ColumnFile {
     Result<void> append_i64(i64 v);
     Result<void> append_f64(f64 v);
     Result<void> append_null();
+    Result<void> append_str(std::string_view s);
 
     Result<void> append_bulk(const std::vector<Value>& values);
 
     Result<i32> get_i32(u64 row_id);
     Result<i64> get_i64(u64 row_id);
     Result<f64> get_f64(u64 row_id);
+    std::string get_str(u64 row_id);
     bool is_null(u64 row_id);
 
     Result<void> scan(std::function<void(const ColumnPage&)> fn);
@@ -73,7 +78,8 @@ class ColumnFile {
 
   private:
     ColumnFile(std::unique_ptr<DiskManager> disk, std::unique_ptr<BufferPool> pool, TypeId type,
-               bool nullable, u16 capacity, Page current, PageId current_id, bool current_dirty);
+               bool nullable, u16 capacity, u16 max_len, Page current, PageId current_id,
+               bool current_dirty);
 
     Result<void> ensure_room_for_append();
     Result<void> rotate_page();
@@ -83,6 +89,7 @@ class ColumnFile {
     TypeId type_;
     bool nullable_;
     u16 capacity_;
+    u16 max_len_;
     Page current_page_;
     PageId current_page_id_;
     bool current_dirty_;

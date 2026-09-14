@@ -19,6 +19,8 @@ static Value extract(const ColumnVector& col, size_t row) {
         return col.get_i32(row);
     case TypeId::INT64:
         return col.get_i64(row);
+    case TypeId::VARCHAR:
+        return col.get_str(row);
     default:
         return col.get_f64(row);
     }

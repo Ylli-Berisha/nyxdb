@@ -6,6 +6,7 @@
 
 #include <cassert>
 #include <cstring>
+#include <string>
 #include <vector>
 
 namespace nyx {
@@ -20,8 +21,21 @@ class ColumnVector {
 
     static ColumnVector gather_via_sel(const ColumnVector& src, const SelectionVector& sel) {
         ColumnVector out = ColumnVector::make(src.type_, sel.size(), src.nullable_);
-        size_t bytes = type_size(src.type_);
         size_t out_idx = 0;
+
+        if (src.type_ == TypeId::VARCHAR) {
+            sel.for_each([&](u32 phys) {
+                out.str_data_[out_idx] = src.str_data_[phys];
+                if (src.nullable_ && ((src.null_bitmap_[phys / 8] >> (phys % 8)) & 1u)) {
+                    out.null_bitmap_[out_idx / 8] |= static_cast<u8>(1u << (out_idx % 8));
+                    out.has_nulls_ = true;
+                }
+                ++out_idx;
+            });
+            return out;
+        }
+
+        size_t bytes = type_size(src.type_);
         sel.for_each([&](u32 phys) {
             std::memcpy(out.data_.data() + out_idx * bytes,
                         src.data_.data() + static_cast<size_t>(phys) * bytes, bytes);
@@ -37,7 +51,10 @@ class ColumnVector {
     static ColumnVector empty(TypeId type, bool nullable, size_t reserve = 0) {
         ColumnVector cv(type, 0, nullable);
         if (reserve > 0) {
-            cv.data_.reserve(reserve * type_size(type));
+            if (type == TypeId::VARCHAR)
+                cv.str_data_.reserve(reserve);
+            else
+                cv.data_.reserve(reserve * type_size(type));
             if (nullable)
                 cv.null_bitmap_.reserve((reserve + 7) / 8);
         }
@@ -76,6 +93,12 @@ class ColumnVector {
         return v;
     }
 
+    const std::string& get_str(size_t i) const {
+        assert(type_ == TypeId::VARCHAR);
+        assert(i < size_);
+        return str_data_[i];
+    }
+
     bool is_null(size_t i) const {
         assert(i < size_);
         if (!nullable_)
@@ -103,6 +126,14 @@ class ColumnVector {
         assert(type_ == TypeId::DOUBLE);
         assert(i < size_);
         std::memcpy(data_.data() + i * sizeof(f64), &v, sizeof(f64));
+        if (nullable_)
+            null_bitmap_[i / 8] &= ~(1u << (i % 8));
+    }
+
+    void set_str(size_t i, const std::string& s) {
+        assert(type_ == TypeId::VARCHAR);
+        assert(i < size_);
+        str_data_[i] = s;
         if (nullable_)
             null_bitmap_[i / 8] &= ~(1u << (i % 8));
     }
@@ -135,6 +166,14 @@ class ColumnVector {
         std::memcpy(data_.data() + old * sizeof(f64), &v, sizeof(f64));
     }
 
+    void append_str(const std::string& s) {
+        assert(type_ == TypeId::VARCHAR);
+        str_data_.push_back(s);
+        if (nullable_)
+            null_bitmap_.resize((str_data_.size() + 7) / 8, 0);
+        size_ = str_data_.size();
+    }
+
     void append_null() {
         assert(nullable_);
         size_t old = size_;
@@ -150,9 +189,13 @@ class ColumnVector {
     size_t null_bitmap_bytes() const { return null_bitmap_.size(); }
 
     void resize(size_t new_size) {
-        data_.resize(new_size * type_size(type_));
+        if (type_ == TypeId::VARCHAR) {
+            str_data_.resize(new_size);
+        } else {
+            data_.resize(new_size * type_size(type_));
+        }
         if (nullable_)
-            null_bitmap_.resize((new_size + 7) / 8);
+            null_bitmap_.resize((new_size + 7) / 8, 0);
         size_ = new_size;
     }
 
@@ -164,6 +207,22 @@ class ColumnVector {
             return;
 
         size_t new_size = size_ - n;
+
+        if (type_ == TypeId::VARCHAR) {
+            str_data_.erase(str_data_.begin(), str_data_.begin() + static_cast<ptrdiff_t>(n));
+            if (nullable_) {
+                for (size_t i = 0; i < new_size; ++i) {
+                    bool src_null = (null_bitmap_[(i + n) / 8] >> ((i + n) % 8)) & 1u;
+                    null_bitmap_[i / 8] &= ~static_cast<u8>(1u << (i % 8));
+                    if (src_null)
+                        null_bitmap_[i / 8] |= static_cast<u8>(1u << (i % 8));
+                }
+                null_bitmap_.resize((new_size + 7) / 8);
+            }
+            size_ = new_size;
+            return;
+        }
+
         size_t bytes = type_size(type_);
         if (new_size > 0)
             std::memmove(data_.data(), data_.data() + n * bytes, new_size * bytes);
@@ -183,8 +242,28 @@ class ColumnVector {
         assert(mask.type() == TypeId::INT32);
         assert(mask.size() == size_);
 
-        size_t bytes = type_size(type_);
         size_t w = 0;
+
+        if (type_ == TypeId::VARCHAR) {
+            for (size_t r = 0; r < size_; ++r) {
+                if (mask.is_null(r) || mask.get_i32(r) == 0)
+                    continue;
+                if (w != r) {
+                    str_data_[w] = std::move(str_data_[r]);
+                    if (nullable_) {
+                        bool src_null = (null_bitmap_[r / 8] >> (r % 8)) & 1u;
+                        null_bitmap_[w / 8] &= ~static_cast<u8>(1u << (w % 8));
+                        if (src_null)
+                            null_bitmap_[w / 8] |= static_cast<u8>(1u << (w % 8));
+                    }
+                }
+                w++;
+            }
+            resize(w);
+            return;
+        }
+
+        size_t bytes = type_size(type_);
         for (size_t r = 0; r < size_; ++r) {
             if (mask.is_null(r))
                 continue;
@@ -214,6 +293,7 @@ class ColumnVector {
     bool has_nulls_;
     size_t size_;
     std::vector<byte> data_;
+    std::vector<std::string> str_data_;
     std::vector<u8> null_bitmap_;
 };
 

@@ -28,6 +28,8 @@ std::unique_ptr<Expression> Planner::lower_expr_(const bound::BoundExpr& e, cons
                 return std::make_unique<Literal>(Value{i64(n.value)});
             } else if constexpr (std::is_same_v<T, bound::BoundDoubleLit>) {
                 return std::make_unique<Literal>(Value{n.value});
+            } else if constexpr (std::is_same_v<T, bound::BoundStringLit>) {
+                return std::make_unique<Literal>(Value{n.value});
             } else if constexpr (std::is_same_v<T, bound::BoundNullLit>) {
                 return std::make_unique<Literal>(Value{std::monostate{}});
             } else if constexpr (std::is_same_v<T, bound::BoundColumnRef>) {

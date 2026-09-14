@@ -102,3 +102,71 @@ TEST_F(DatabaseTest, OrderByAndLimit) {
     EXPECT_EQ(std::get<i32>(r.value().columns[0][0]), 1);
     EXPECT_EQ(std::get<i32>(r.value().columns[0][1]), 2);
 }
+
+class VarcharTest : public ::testing::Test {
+  protected:
+    void SetUp() override {
+        fs::remove_all(ROOT);
+        auto r = Database::open(ROOT);
+        ASSERT_TRUE(r.is_ok()) << r.error().message;
+        db_ = std::make_unique<Database>(std::move(r.value()));
+
+        ASSERT_TRUE(db_->execute("CREATE TABLE people (name VARCHAR(50), age INT)").is_ok());
+    }
+    void TearDown() override { fs::remove_all(ROOT); }
+
+    std::unique_ptr<Database> db_;
+    static const std::string ROOT;
+};
+const std::string VarcharTest::ROOT = "/tmp/nyxdb_varchar_test";
+
+TEST_F(VarcharTest, InsertAndSelectString) {
+    ASSERT_TRUE(db_->execute("INSERT INTO people VALUES ('Alice', 30)").is_ok());
+    auto r = db_->execute("SELECT name FROM people");
+    ASSERT_TRUE(r.is_ok()) << r.error().message;
+    ASSERT_EQ(r.value().row_count(), 1u);
+    EXPECT_EQ(std::get<std::string>(r.value().columns[0][0]), "Alice");
+}
+
+TEST_F(VarcharTest, WhereStringEquality) {
+    ASSERT_TRUE(db_->execute("INSERT INTO people VALUES ('Alice', 30), ('Bob', 25), ('Alice', 22)")
+                    .is_ok());
+    auto r = db_->execute("SELECT age FROM people WHERE name = 'Alice'");
+    ASSERT_TRUE(r.is_ok()) << r.error().message;
+    EXPECT_EQ(r.value().row_count(), 2u);
+}
+
+TEST_F(VarcharTest, OrderByString) {
+    ASSERT_TRUE(db_->execute("INSERT INTO people VALUES ('Bob', 25), ('Alice', 30)").is_ok());
+    auto r = db_->execute("SELECT name FROM people ORDER BY name ASC");
+    ASSERT_TRUE(r.is_ok()) << r.error().message;
+    ASSERT_EQ(r.value().row_count(), 2u);
+    EXPECT_EQ(std::get<std::string>(r.value().columns[0][0]), "Alice");
+    EXPECT_EQ(std::get<std::string>(r.value().columns[0][1]), "Bob");
+}
+
+TEST_F(VarcharTest, WhereStringComparisons) {
+    ASSERT_TRUE(db_->execute("INSERT INTO people VALUES ('Alice', 30), ('Bob', 25), ('Carol', 28)")
+                    .is_ok());
+    auto r = db_->execute("SELECT name FROM people WHERE name < 'Bob'");
+    ASSERT_TRUE(r.is_ok()) << r.error().message;
+    EXPECT_EQ(r.value().row_count(), 1u);
+    EXPECT_EQ(std::get<std::string>(r.value().columns[0][0]), "Alice");
+}
+
+TEST_F(VarcharTest, StringTooLongRejected) {
+    auto r = db_->execute(
+        "INSERT INTO people VALUES ('AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA', 1)");
+    ASSERT_TRUE(r.is_err());
+}
+
+TEST_F(VarcharTest, MultipleStringColumns) {
+    ASSERT_TRUE(db_->execute("CREATE TABLE pairs (first VARCHAR(30), last VARCHAR(30))").is_ok());
+    ASSERT_TRUE(
+        db_->execute("INSERT INTO pairs VALUES ('John', 'Doe'), ('Jane', 'Smith')").is_ok());
+    auto r = db_->execute("SELECT first, last FROM pairs");
+    ASSERT_TRUE(r.is_ok()) << r.error().message;
+    ASSERT_EQ(r.value().row_count(), 2u);
+    EXPECT_EQ(std::get<std::string>(r.value().columns[0][0]), "John");
+    EXPECT_EQ(std::get<std::string>(r.value().columns[1][0]), "Doe");
+}

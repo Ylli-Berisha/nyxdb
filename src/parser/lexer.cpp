@@ -12,6 +12,8 @@ const char* token_kind_name(TokenKind kind) {
         return "INT_LITERAL";
     case TokenKind::DOUBLE_LITERAL:
         return "DOUBLE_LITERAL";
+    case TokenKind::STRING_LITERAL:
+        return "STRING_LITERAL";
     case TokenKind::IDENTIFIER:
         return "IDENTIFIER";
     case TokenKind::LPAREN:
@@ -102,6 +104,10 @@ const char* token_kind_name(TokenKind kind) {
         return "BIGINT";
     case TokenKind::KW_DOUBLE:
         return "DOUBLE";
+    case TokenKind::KW_VARCHAR:
+        return "VARCHAR";
+    case TokenKind::KW_NVARCHAR:
+        return "NVARCHAR";
     case TokenKind::END_OF_FILE:
         return "EOF";
     }
@@ -110,21 +116,37 @@ const char* token_kind_name(TokenKind kind) {
 
 static const std::unordered_map<std::string, TokenKind>& keyword_table() {
     static const std::unordered_map<std::string, TokenKind> table = {
-        {"select", TokenKind::KW_SELECT},   {"from", TokenKind::KW_FROM},
-        {"where", TokenKind::KW_WHERE},     {"group", TokenKind::KW_GROUP},
-        {"by", TokenKind::KW_BY},           {"having", TokenKind::KW_HAVING},
-        {"order", TokenKind::KW_ORDER},     {"asc", TokenKind::KW_ASC},
-        {"desc", TokenKind::KW_DESC},       {"limit", TokenKind::KW_LIMIT},
-        {"offset", TokenKind::KW_OFFSET},   {"join", TokenKind::KW_JOIN},
-        {"inner", TokenKind::KW_INNER},     {"on", TokenKind::KW_ON},
-        {"as", TokenKind::KW_AS},           {"and", TokenKind::KW_AND},
-        {"or", TokenKind::KW_OR},           {"not", TokenKind::KW_NOT},
-        {"is", TokenKind::KW_IS},           {"null", TokenKind::KW_NULL},
-        {"create", TokenKind::KW_CREATE},   {"table", TokenKind::KW_TABLE},
-        {"insert", TokenKind::KW_INSERT},   {"into", TokenKind::KW_INTO},
-        {"values", TokenKind::KW_VALUES},   {"int", TokenKind::KW_INT},
-        {"integer", TokenKind::KW_INTEGER}, {"bigint", TokenKind::KW_BIGINT},
+        {"select", TokenKind::KW_SELECT},
+        {"from", TokenKind::KW_FROM},
+        {"where", TokenKind::KW_WHERE},
+        {"group", TokenKind::KW_GROUP},
+        {"by", TokenKind::KW_BY},
+        {"having", TokenKind::KW_HAVING},
+        {"order", TokenKind::KW_ORDER},
+        {"asc", TokenKind::KW_ASC},
+        {"desc", TokenKind::KW_DESC},
+        {"limit", TokenKind::KW_LIMIT},
+        {"offset", TokenKind::KW_OFFSET},
+        {"join", TokenKind::KW_JOIN},
+        {"inner", TokenKind::KW_INNER},
+        {"on", TokenKind::KW_ON},
+        {"as", TokenKind::KW_AS},
+        {"and", TokenKind::KW_AND},
+        {"or", TokenKind::KW_OR},
+        {"not", TokenKind::KW_NOT},
+        {"is", TokenKind::KW_IS},
+        {"null", TokenKind::KW_NULL},
+        {"create", TokenKind::KW_CREATE},
+        {"table", TokenKind::KW_TABLE},
+        {"insert", TokenKind::KW_INSERT},
+        {"into", TokenKind::KW_INTO},
+        {"values", TokenKind::KW_VALUES},
+        {"int", TokenKind::KW_INT},
+        {"integer", TokenKind::KW_INTEGER},
+        {"bigint", TokenKind::KW_BIGINT},
         {"double", TokenKind::KW_DOUBLE},
+        {"varchar", TokenKind::KW_VARCHAR},
+        {"nvarchar", TokenKind::KW_NVARCHAR},
     };
     return table;
 }
@@ -235,6 +257,35 @@ Result<Token> Lexer::lex_number_() {
     return Result<Token>::ok(std::move(tok));
 }
 
+Result<Token> Lexer::lex_string_() {
+    u32 start = static_cast<u32>(pos_);
+    advance_();
+    std::string text;
+    while (true) {
+        if (at_end_())
+            return error_("unterminated string literal", start);
+        char c = source_[pos_];
+        if (c == '\'') {
+            advance_();
+            if (!at_end_() && source_[pos_] == '\'') {
+                text.push_back('\'');
+                advance_();
+            } else {
+                break;
+            }
+        } else {
+            text.push_back(c);
+            advance_();
+        }
+    }
+    u32 length = static_cast<u32>(pos_) - start;
+    Token tok;
+    tok.kind = TokenKind::STRING_LITERAL;
+    tok.loc = SourceLoc{start, length};
+    tok.text = std::move(text);
+    return Result<Token>::ok(std::move(tok));
+}
+
 Result<Token> Lexer::lex_symbol_() {
     u32 start = static_cast<u32>(pos_);
     char c = source_[pos_];
@@ -301,6 +352,8 @@ Result<Token> Lexer::next_token_() {
         return lex_ident_or_keyword_();
     if (std::isdigit(static_cast<unsigned char>(c)))
         return lex_number_();
+    if (c == '\'')
+        return lex_string_();
     return lex_symbol_();
 }
 

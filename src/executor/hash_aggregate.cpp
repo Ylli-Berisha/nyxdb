@@ -17,20 +17,22 @@ static constexpr size_t MAX_GROUP_KEY_BYTES = 128;
 static constexpr size_t INITIAL_TABLE_SIZE = 16;
 
 static u32 hash_group_row(const std::vector<ColumnVector>& key_cols, size_t row) {
-    byte buf[MAX_GROUP_KEY_BYTES];
-    size_t off = 0;
+    u64 h = 0;
     for (const auto& col : key_cols) {
-        size_t sz = type_size(col.type());
-        assert(off + sz + 1 <= MAX_GROUP_KEY_BYTES);
         bool is_null = col.is_null(row);
-        buf[off++] = is_null ? 0 : 1;
+        byte null_flag = is_null ? 0 : 1;
+        h = xxhash64(&null_flag, 1, h);
         if (is_null)
-            std::memset(buf + off, 0, sz);
-        else
-            std::memcpy(buf + off, col.data() + row * sz, sz);
-        off += sz;
+            continue;
+        if (col.type() == TypeId::VARCHAR) {
+            const std::string& s = col.get_str(row);
+            h = xxhash64(reinterpret_cast<const byte*>(s.data()), s.size(), h);
+        } else {
+            size_t sz = type_size(col.type());
+            h = xxhash64(col.data() + row * sz, sz, h);
+        }
     }
-    return static_cast<u32>(xxhash64(buf, off));
+    return static_cast<u32>(h);
 }
 
 static bool group_keys_equal(const std::vector<ColumnVector>& lc, size_t li,
@@ -44,9 +46,14 @@ static bool group_keys_equal(const std::vector<ColumnVector>& lc, size_t li,
             return false;
         if (ln)
             continue;
-        size_t sz = type_size(lc[k].type());
-        if (std::memcmp(lc[k].data() + li * sz, rc[k].data() + ri * sz, sz) != 0)
-            return false;
+        if (lc[k].type() == TypeId::VARCHAR) {
+            if (lc[k].get_str(li) != rc[k].get_str(ri))
+                return false;
+        } else {
+            size_t sz = type_size(lc[k].type());
+            if (std::memcmp(lc[k].data() + li * sz, rc[k].data() + ri * sz, sz) != 0)
+                return false;
+        }
     }
     return true;
 }
@@ -231,6 +238,9 @@ u32 HashAggregate::find_or_create_group_(const std::vector<ColumnVector>& key_co
                 break;
             case TypeId::DOUBLE:
                 dst.append_f64(src.get_f64(row));
+                break;
+            case TypeId::VARCHAR:
+                dst.append_str(src.get_str(row));
                 break;
             default:
                 assert(false);
@@ -424,6 +434,15 @@ Chunk HashAggregate::emit_slice_() {
                     out.append_null();
                 else
                     out.append_f64(gk.get_f64(g));
+            }
+            break;
+        case TypeId::VARCHAR:
+            for (size_t i = 0; i < n; ++i) {
+                size_t g = emit_cursor_ + i;
+                if (gk.is_null(g))
+                    out.append_null();
+                else
+                    out.append_str(gk.get_str(g));
             }
             break;
         default:

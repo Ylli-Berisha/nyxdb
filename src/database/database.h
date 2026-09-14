@@ -28,6 +28,7 @@ class Database {
     Database& operator=(Database&&) noexcept = default;
 
     Result<ExecuteResult> execute(const std::string& sql);
+    Result<void> flush() { return catalog_.flush_all(); }
 
   private:
     explicit Database(Catalog catalog);

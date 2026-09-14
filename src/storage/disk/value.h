@@ -7,7 +7,7 @@
 
 namespace nyx {
 
-using Value = std::variant<std::monostate, i32, i64, f64>;
+using Value = std::variant<std::monostate, i32, i64, f64, std::string>;
 
 inline bool is_null(const Value& v) {
     return std::holds_alternative<std::monostate>(v);

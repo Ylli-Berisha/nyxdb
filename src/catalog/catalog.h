@@ -25,6 +25,7 @@ class Catalog {
     usize size() const { return tables_.size(); }
 
     Result<void> add_table(const std::string& name, Schema schema);
+    Result<void> flush_all();
 
   private:
     explicit Catalog(std::string data_root);

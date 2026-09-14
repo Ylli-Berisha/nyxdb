@@ -192,6 +192,10 @@ Result<ast::ExprPtr> Parser::parse_primary_() {
         f64 v = std::strtod(tok.text.c_str(), nullptr);
         return Result<ast::ExprPtr>::ok(ast::make_expr(ast::DoubleLit{v, tok.loc}));
     }
+    case TokenKind::STRING_LITERAL: {
+        consume_();
+        return Result<ast::ExprPtr>::ok(ast::make_expr(ast::StringLit{tok.text, tok.loc}));
+    }
     case TokenKind::KW_NULL: {
         consume_();
         return Result<ast::ExprPtr>::ok(ast::make_expr(ast::NullLit{tok.loc}));
@@ -527,6 +531,23 @@ Result<ast::ColumnDef> Parser::parse_column_def_() {
         def.type = TypeId::DOUBLE;
         consume_();
         break;
+    case TokenKind::KW_VARCHAR:
+    case TokenKind::KW_NVARCHAR: {
+        def.type = TypeId::VARCHAR;
+        consume_();
+        if (match_(TokenKind::LPAREN)) {
+            auto n = parse_int_literal_("VARCHAR");
+            if (n.is_err())
+                return Result<ast::ColumnDef>::err(n.error().message);
+            if (n.value() <= 0 || n.value() > 65535)
+                return Result<ast::ColumnDef>::err(
+                    err_msg_("VARCHAR length must be between 1 and 65535", peek_()));
+            def.max_len = static_cast<u16>(n.value());
+            if (!match_(TokenKind::RPAREN))
+                return Result<ast::ColumnDef>::err(err_msg_("expected ')'", peek_()));
+        }
+        break;
+    }
     default:
         return Result<ast::ColumnDef>::err(err_msg_("expected column type", peek_()));
     }

@@ -38,6 +38,10 @@ struct BoundNullLit {
     TypeId type;
 };
 
+struct BoundStringLit {
+    std::string value;
+};
+
 struct BoundColumnRef {
     BindingRef ref;
 };
@@ -76,8 +80,9 @@ struct BoundNullCheck {
 };
 
 struct BoundExpr {
-    std::variant<BoundIntLit, BoundDoubleLit, BoundNullLit, BoundColumnRef, BoundAggregateRef,
-                 BoundProjectionRef, BoundBinaryOp, BoundLogicalOp, BoundNotOp, BoundNullCheck>
+    std::variant<BoundIntLit, BoundDoubleLit, BoundStringLit, BoundNullLit, BoundColumnRef,
+                 BoundAggregateRef, BoundProjectionRef, BoundBinaryOp, BoundLogicalOp, BoundNotOp,
+                 BoundNullCheck>
         node;
 };
 
