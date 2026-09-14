@@ -20,6 +20,8 @@ add_library(nyxdb_core STATIC
     executor/hash_aggregate.cpp
     parser/lexer.cpp
     parser/parser.cpp
+    storage/wal/wal_writer.cpp
+    storage/wal/wal_reader.cpp
     catalog/catalog.cpp
     binder/bound_ast.cpp
     binder/binder.cpp

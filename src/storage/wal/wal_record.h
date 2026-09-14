@@ -6,12 +6,12 @@
 
 namespace nyx {
 
-static constexpr u8  WAL_MAGIC[4]     = {'N', 'W', 'A', 'L'};
-static constexpr u16 WAL_VERSION       = 0x0001;
-static constexpr u8  WAL_TYPE_INSERT   = 0x01;
-static constexpr u8  WAL_TYPE_CREATE   = 0x02;
-static constexpr usize WAL_HEADER_SIZE = 6;  // magic(4) + version(2)
-static constexpr u64 WAL_CHECKPOINT_BYTES = 64ULL * 1024 * 1024;  // 64 MB
+static constexpr u8 WAL_MAGIC[4] = {'N', 'W', 'A', 'L'};
+static constexpr u16 WAL_VERSION = 0x0001;
+static constexpr u8 WAL_TYPE_INSERT = 0x01;
+static constexpr u8 WAL_TYPE_CREATE = 0x02;
+static constexpr usize WAL_HEADER_SIZE = 6; // magic(4) + version(2)
+static constexpr u64 WAL_CHECKPOINT_BYTES = 64ULL * 1024 * 1024; // 64 MB
 
 static inline void wal_put_u16(u8* dst, u16 v) {
     dst[0] = static_cast<u8>(v & 0xFF);

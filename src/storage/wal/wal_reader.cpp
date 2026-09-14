@@ -34,8 +34,7 @@ WalReader& WalReader::operator=(WalReader&& other) noexcept {
 Result<WalReader> WalReader::open(const std::string& path) {
     int fd = ::open(path.c_str(), O_RDONLY);
     if (fd < 0)
-        return Result<WalReader>::err("WalReader: cannot open " + path + ": " +
-                                      strerror(errno));
+        return Result<WalReader>::err("WalReader: cannot open " + path + ": " + strerror(errno));
     return Result<WalReader>::ok(WalReader(fd));
 }
 
@@ -90,9 +89,9 @@ Result<std::vector<WalRecord>> WalReader::read_all() {
         pos += name_len;
 
         WalRecord rec;
-        rec.type        = static_cast<WalRecord::Type>(type_byte);
+        rec.type = static_cast<WalRecord::Type>(type_byte);
         rec.byte_offset = record_start;
-        rec.table_name  = table_name;
+        rec.table_name = table_name;
 
         if (type_byte == WAL_TYPE_CREATE) {
             u8 col_count_bytes[2];
@@ -105,18 +104,22 @@ Result<std::vector<WalRecord>> WalReader::read_all() {
             bool ok = true;
             for (u16 c = 0; c < col_count && ok; ++c) {
                 u8 col_hdr[6];
-                if (!read_exact(fd_, col_hdr, 6)) { ok = false; break; }
+                if (!read_exact(fd_, col_hdr, 6)) {
+                    ok = false;
+                    break;
+                }
                 payload.insert(payload.end(), col_hdr, col_hdr + 6);
                 pos += 6;
 
-                TypeId type_id  = static_cast<TypeId>(col_hdr[0]);
-                bool nullable   = col_hdr[1] != 0;
-                u16 max_len     = wal_read_u16(col_hdr + 2);
-                u16 cname_len   = wal_read_u16(col_hdr + 4);
+                TypeId type_id = static_cast<TypeId>(col_hdr[0]);
+                bool nullable = col_hdr[1] != 0;
+                u16 max_len = wal_read_u16(col_hdr + 2);
+                u16 cname_len = wal_read_u16(col_hdr + 4);
 
                 std::string cname(cname_len, '\0');
                 if (!read_exact(fd_, reinterpret_cast<u8*>(cname.data()), cname_len)) {
-                    ok = false; break;
+                    ok = false;
+                    break;
                 }
                 payload.insert(payload.end(), cname.begin(), cname.end());
                 pos += cname_len;
@@ -139,11 +142,14 @@ Result<std::vector<WalRecord>> WalReader::read_all() {
             bool ok = true;
             for (u16 c = 0; c < col_count && ok; ++c) {
                 u8 col_hdr[3];
-                if (!read_exact(fd_, col_hdr, 3)) { ok = false; break; }
+                if (!read_exact(fd_, col_hdr, 3)) {
+                    ok = false;
+                    break;
+                }
                 payload.insert(payload.end(), col_hdr, col_hdr + 3);
                 pos += 3;
-                rec.schema.push_back({"", static_cast<TypeId>(col_hdr[0]), false,
-                                      wal_read_u16(col_hdr + 1)});
+                rec.schema.push_back(
+                    {"", static_cast<TypeId>(col_hdr[0]), false, wal_read_u16(col_hdr + 1)});
             }
             if (!ok)
                 break;
@@ -152,7 +158,10 @@ Result<std::vector<WalRecord>> WalReader::read_all() {
                 std::vector<Value> row;
                 for (u16 c = 0; c < col_count && ok; ++c) {
                     u8 is_null;
-                    if (!read_exact(fd_, &is_null, 1)) { ok = false; break; }
+                    if (!read_exact(fd_, &is_null, 1)) {
+                        ok = false;
+                        break;
+                    }
                     payload.push_back(is_null);
                     pos += 1;
 
@@ -164,19 +173,28 @@ Result<std::vector<WalRecord>> WalReader::read_all() {
                     TypeId t = rec.schema[c].type;
                     if (t == TypeId::INT32) {
                         u8 vb[4];
-                        if (!read_exact(fd_, vb, 4)) { ok = false; break; }
+                        if (!read_exact(fd_, vb, 4)) {
+                            ok = false;
+                            break;
+                        }
                         payload.insert(payload.end(), vb, vb + 4);
                         pos += 4;
                         row.emplace_back(static_cast<i32>(wal_read_u32(vb)));
                     } else if (t == TypeId::INT64) {
                         u8 vb[8];
-                        if (!read_exact(fd_, vb, 8)) { ok = false; break; }
+                        if (!read_exact(fd_, vb, 8)) {
+                            ok = false;
+                            break;
+                        }
                         payload.insert(payload.end(), vb, vb + 8);
                         pos += 8;
                         row.emplace_back(static_cast<i64>(wal_read_u64(vb)));
                     } else if (t == TypeId::DOUBLE) {
                         u8 vb[8];
-                        if (!read_exact(fd_, vb, 8)) { ok = false; break; }
+                        if (!read_exact(fd_, vb, 8)) {
+                            ok = false;
+                            break;
+                        }
                         payload.insert(payload.end(), vb, vb + 8);
                         pos += 8;
                         u64 bits = wal_read_u64(vb);
@@ -185,13 +203,17 @@ Result<std::vector<WalRecord>> WalReader::read_all() {
                         row.emplace_back(dv);
                     } else {
                         u8 slen_bytes[2];
-                        if (!read_exact(fd_, slen_bytes, 2)) { ok = false; break; }
+                        if (!read_exact(fd_, slen_bytes, 2)) {
+                            ok = false;
+                            break;
+                        }
                         payload.insert(payload.end(), slen_bytes, slen_bytes + 2);
                         pos += 2;
                         u16 slen = wal_read_u16(slen_bytes);
                         std::string s(slen, '\0');
                         if (!read_exact(fd_, reinterpret_cast<u8*>(s.data()), slen)) {
-                            ok = false; break;
+                            ok = false;
+                            break;
                         }
                         payload.insert(payload.end(), s.begin(), s.end());
                         pos += slen;

@@ -294,7 +294,7 @@ Result<ColumnFile::PageHandle> ColumnFile::read_page(PageId id) {
 
 Result<void> ColumnFile::truncate(u64 target_rows) {
     u64 full_pages = target_rows / capacity_;
-    u16 remaining  = static_cast<u16>(target_rows % capacity_);
+    u16 remaining = static_cast<u16>(target_rows % capacity_);
 
     u64 pages_to_keep;
     if (remaining == 0 && target_rows > 0)

@@ -29,8 +29,7 @@ class Catalog {
     usize size() const { return tables_.size(); }
 
     Result<void> add_table(const std::string& name, Schema schema);
-    Result<u64> insert(const std::string& table_name,
-                       const std::vector<std::vector<Value>>& rows);
+    Result<u64> insert(const std::string& table_name, const std::vector<std::vector<Value>>& rows);
     Result<void> flush_all();
 
   private:

@@ -130,8 +130,8 @@ Result<Catalog> Catalog::load(const std::string& data_root) {
             if (cat.tables_.count(canonical) == 0) {
                 auto r = cat.create_table_(rec.table_name, rec.schema);
                 if (r.is_err())
-                    return Result<Catalog>::err("catalog: wal replay create '" +
-                                               rec.table_name + "': " + r.error().message);
+                    return Result<Catalog>::err("catalog: wal replay create '" + rec.table_name +
+                                                "': " + r.error().message);
             }
         }
     }
@@ -142,8 +142,7 @@ Result<Catalog> Catalog::load(const std::string& data_root) {
         lsns[name] = cp;
         auto tr = tbl.truncate(cp.rows);
         if (tr.is_err())
-            return Result<Catalog>::err("catalog: truncate '" + name +
-                                        "': " + tr.error().message);
+            return Result<Catalog>::err("catalog: truncate '" + name + "': " + tr.error().message);
     }
 
     for (const auto& rec : records) {

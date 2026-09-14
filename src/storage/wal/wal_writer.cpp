@@ -28,9 +28,9 @@ WalWriter& WalWriter::operator=(WalWriter&& other) noexcept {
     if (this != &other) {
         if (fd_ >= 0)
             ::close(fd_);
-        fd_     = other.fd_;
+        fd_ = other.fd_;
         offset_ = other.offset_;
-        path_   = std::move(other.path_);
+        path_ = std::move(other.path_);
         other.fd_ = -1;
     }
     return *this;
@@ -41,8 +41,7 @@ Result<WalWriter> WalWriter::open(const std::string& path) {
 
     int fd = ::open(path.c_str(), O_WRONLY | O_CREAT | O_APPEND, 0644);
     if (fd < 0)
-        return Result<WalWriter>::err("WalWriter: cannot open " + path + ": " +
-                                      strerror(errno));
+        return Result<WalWriter>::err("WalWriter: cannot open " + path + ": " + strerror(errno));
 
     u64 offset = 0;
     if (is_new) {
