@@ -292,6 +292,41 @@ Result<ColumnFile::PageHandle> ColumnFile::read_page(PageId id) {
     return Result<PageHandle>::ok(PageHandle(pool_.get(), id, p.value()));
 }
 
+Result<void> ColumnFile::truncate(u64 target_rows) {
+    u64 full_pages = target_rows / capacity_;
+    u16 remaining = static_cast<u16>(target_rows % capacity_);
+
+    u64 pages_to_keep;
+    if (remaining == 0 && target_rows > 0)
+        pages_to_keep = full_pages;
+    else
+        pages_to_keep = full_pages + 1;
+    pages_to_keep = std::max<u64>(pages_to_keep, 1);
+
+    auto r = disk_->truncate(pages_to_keep);
+    if (r.is_err())
+        return r;
+
+    PageId last = static_cast<PageId>(pages_to_keep - 1);
+    auto rd = disk_->read_page(last, current_page_);
+    if (rd.is_err())
+        return rd;
+
+    ColumnPage view(current_page_);
+    u16 needed = (remaining == 0 && target_rows > 0) ? capacity_ : remaining;
+    if (view.value_count() != needed) {
+        view.truncate_to(needed);
+        auto wr = disk_->write_page(current_page_);
+        if (wr.is_err())
+            return wr;
+    }
+
+    current_page_id_ = last;
+    current_dirty_ = false;
+    pool_ = std::make_unique<BufferPool>(POOL_FRESH_CAPACITY, *disk_);
+    return Result<void>::ok();
+}
+
 Result<void> ColumnFile::flush() {
     if (!current_dirty_)
         return Result<void>::ok();

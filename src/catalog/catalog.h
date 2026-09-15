@@ -3,9 +3,13 @@
 #include "common/result.h"
 #include "storage/disk/schema.h"
 #include "storage/disk/table.h"
+#include "storage/disk/value.h"
+#include "storage/wal/wal_writer.h"
 
+#include <optional>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 namespace nyx {
 
@@ -25,13 +29,18 @@ class Catalog {
     usize size() const { return tables_.size(); }
 
     Result<void> add_table(const std::string& name, Schema schema);
+    Result<u64> insert(const std::string& table_name, const std::vector<std::vector<Value>>& rows);
     Result<void> flush_all();
 
   private:
     explicit Catalog(std::string data_root);
 
+    Result<void> create_table_(const std::string& name, Schema schema);
+    Result<void> ensure_wal_();
+
     std::string data_root_;
     std::unordered_map<std::string, Table> tables_;
+    std::optional<WalWriter> wal_;
 };
 
 } // namespace nyx
