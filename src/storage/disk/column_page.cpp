@@ -20,6 +20,23 @@ void ColumnPage::init(Page& page, TypeId type, bool nullable, u16 max_len) {
     std::memset(h->reserved, 0, sizeof(h->reserved));
 }
 
+void ColumnPage::truncate_to(u16 new_count) {
+    ColumnPageHeader* h = header();
+    if (new_count >= h->value_count)
+        return;
+    if (h->flags & COL_PAGE_FLAG_NULLABLE) {
+        u16 nc = 0;
+        for (u16 i = 0; i < new_count; ++i) {
+            if (null_bitmap()[i / 8] & (1u << (i % 8)))
+                ++nc;
+        }
+        h->null_count = nc;
+        if (nc == 0)
+            h->flags &= ~COL_PAGE_FLAG_HAS_NULLS;
+    }
+    h->value_count = new_count;
+}
+
 ColumnPageHeader* ColumnPage::header() {
     return reinterpret_cast<ColumnPageHeader*>(page_.payload());
 }

@@ -23,6 +23,7 @@ class DiskManager {
     Result<void> write_page(const Page& page);
     Result<PageId> allocate_page();
     PageId reserve_page_id();
+    Result<void> truncate(u64 page_count);
     Result<void> fsync();
 
     u64 page_count() const { return next_page_id_; }

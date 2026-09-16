@@ -7,10 +7,7 @@ Result<void> run_create_table(Catalog& catalog, const bound::BoundCreateTable& s
 }
 
 Result<u64> run_insert(Catalog& catalog, const bound::BoundInsert& stmt) {
-    Table* t = catalog.table(stmt.table_name);
-    if (!t)
-        return Result<u64>::err("table not found: " + stmt.table_name);
-    return t->insert_many(stmt.rows);
+    return catalog.insert(stmt.table_name, stmt.rows);
 }
 
 } // namespace nyx::frontend
