@@ -278,6 +278,12 @@ Result<ast::Statement> Parser::parse_one_statement_() {
             return Result<ast::Statement>::err(r.error().message);
         return Result<ast::Statement>::ok(ast::Statement{std::move(r.value())});
     }
+    case TokenKind::KW_DROP: {
+        auto r = parse_drop_table_();
+        if (r.is_err())
+            return Result<ast::Statement>::err(r.error().message);
+        return Result<ast::Statement>::ok(ast::Statement{std::move(r.value())});
+    }
     default:
         return Result<ast::Statement>::err(err_msg_("expected statement", peek_()));
     }
@@ -606,6 +612,21 @@ Result<ast::InsertStmt> Parser::parse_insert_() {
             break;
     }
     return Result<ast::InsertStmt>::ok(std::move(stmt));
+}
+
+Result<ast::DropTableStmt> Parser::parse_drop_table_() {
+    consume_();
+    if (!match_(TokenKind::KW_TABLE))
+        return Result<ast::DropTableStmt>::err(err_msg_("expected TABLE", peek_()));
+    bool if_exists = false;
+    if (match_(TokenKind::KW_IF)) {
+        if (!match_(TokenKind::KW_EXISTS))
+            return Result<ast::DropTableStmt>::err(err_msg_("expected EXISTS after IF", peek_()));
+        if_exists = true;
+    }
+    if (peek_().kind != TokenKind::IDENTIFIER)
+        return Result<ast::DropTableStmt>::err(err_msg_("expected table name", peek_()));
+    return Result<ast::DropTableStmt>::ok({consume_().text, if_exists});
 }
 
 } // namespace nyx

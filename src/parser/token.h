@@ -67,6 +67,9 @@ enum class TokenKind : u8 {
     KW_DOUBLE,
     KW_VARCHAR,
     KW_NVARCHAR,
+    KW_DROP,
+    KW_IF,
+    KW_EXISTS,
 
     END_OF_FILE,
 };

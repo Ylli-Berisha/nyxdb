@@ -108,6 +108,12 @@ const char* token_kind_name(TokenKind kind) {
         return "VARCHAR";
     case TokenKind::KW_NVARCHAR:
         return "NVARCHAR";
+    case TokenKind::KW_DROP:
+        return "DROP";
+    case TokenKind::KW_IF:
+        return "IF";
+    case TokenKind::KW_EXISTS:
+        return "EXISTS";
     case TokenKind::END_OF_FILE:
         return "EOF";
     }
@@ -147,6 +153,9 @@ static const std::unordered_map<std::string, TokenKind>& keyword_table() {
         {"double", TokenKind::KW_DOUBLE},
         {"varchar", TokenKind::KW_VARCHAR},
         {"nvarchar", TokenKind::KW_NVARCHAR},
+        {"drop", TokenKind::KW_DROP},
+        {"if", TokenKind::KW_IF},
+        {"exists", TokenKind::KW_EXISTS},
     };
     return table;
 }

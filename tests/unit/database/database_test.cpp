@@ -103,6 +103,52 @@ TEST_F(DatabaseTest, OrderByAndLimit) {
     EXPECT_EQ(std::get<i32>(r.value().columns[0][1]), 2);
 }
 
+TEST_F(DatabaseTest, DropTableOk) {
+    auto r = db_->execute("DROP TABLE users");
+    ASSERT_TRUE(r.is_ok()) << r.error().message;
+    EXPECT_EQ(r.value().row_count(), 0u);
+}
+
+TEST_F(DatabaseTest, DropTableIfExistsNonexistent) {
+    auto r = db_->execute("DROP TABLE IF EXISTS ghost");
+    ASSERT_TRUE(r.is_ok()) << r.error().message;
+}
+
+TEST_F(DatabaseTest, DropTableNonexistent) {
+    auto r = db_->execute("DROP TABLE ghost");
+    ASSERT_TRUE(r.is_err());
+}
+
+TEST_F(DatabaseTest, SelectAfterDropFails) {
+    ASSERT_TRUE(db_->execute("DROP TABLE users").is_ok());
+    auto r = db_->execute("SELECT id FROM users");
+    ASSERT_TRUE(r.is_err());
+}
+
+TEST_F(DatabaseTest, RecreateAfterDrop) {
+    ASSERT_TRUE(db_->execute("DROP TABLE users").is_ok());
+    ASSERT_TRUE(db_->execute("CREATE TABLE users (id INT)").is_ok());
+    ASSERT_TRUE(db_->execute("INSERT INTO users VALUES (1)").is_ok());
+    auto r = db_->execute("SELECT id FROM users");
+    ASSERT_TRUE(r.is_ok()) << r.error().message;
+    EXPECT_EQ(r.value().row_count(), 1u);
+}
+
+TEST_F(DatabaseTest, DropTableDeletesDirectory) {
+    ASSERT_TRUE(db_->execute("DROP TABLE users").is_ok());
+    EXPECT_FALSE(fs::exists(ROOT + "/users"));
+}
+
+TEST_F(DatabaseTest, DropTablePersists) {
+    ASSERT_TRUE(db_->execute("DROP TABLE users").is_ok());
+    db_.reset();
+    auto r = Database::open(ROOT);
+    ASSERT_TRUE(r.is_ok());
+    auto db2 = std::move(r.value());
+    auto sel = db2.execute("SELECT id FROM users");
+    ASSERT_TRUE(sel.is_err());
+}
+
 class VarcharTest : public ::testing::Test {
   protected:
     void SetUp() override {

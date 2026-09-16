@@ -305,9 +305,23 @@ Result<bound::BoundStatement> Binder::bind(const ast::Statement& stmt, std::stri
                 if (r.is_err())
                     return Result<bound::BoundStatement>::err(r.error());
                 return Result<bound::BoundStatement>::ok(std::move(r.value()));
+            } else if constexpr (std::is_same_v<T, ast::DropTableStmt>) {
+                auto r = bind_drop_table(s, source);
+                if (r.is_err())
+                    return Result<bound::BoundStatement>::err(r.error());
+                return Result<bound::BoundStatement>::ok(std::move(r.value()));
             }
         },
         stmt);
+}
+
+Result<bound::BoundDropTable> Binder::bind_drop_table(const ast::DropTableStmt& stmt,
+                                                      std::string_view source) {
+    source_ = source;
+    if (!stmt.if_exists && !catalog_.has_table(stmt.table_name))
+        return Result<bound::BoundDropTable>::err(
+            err_msg_("unknown table: " + stmt.table_name, SourceLoc{0, 0}));
+    return Result<bound::BoundDropTable>::ok({stmt.table_name, stmt.if_exists});
 }
 
 Result<bound::BoundInsert> Binder::bind_insert(const ast::InsertStmt& stmt,

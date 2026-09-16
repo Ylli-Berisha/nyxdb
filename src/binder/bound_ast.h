@@ -132,7 +132,12 @@ struct BoundInsert {
     std::vector<std::vector<Value>> rows;
 };
 
-using BoundStatement = std::variant<BoundSelect, BoundCreateTable, BoundInsert>;
+struct BoundDropTable {
+    std::string table_name;
+    bool if_exists = false;
+};
+
+using BoundStatement = std::variant<BoundSelect, BoundCreateTable, BoundInsert, BoundDropTable>;
 
 TypeId bound_expr_type(const BoundExpr& e);
 bool bound_expr_nullable(const BoundExpr& e);

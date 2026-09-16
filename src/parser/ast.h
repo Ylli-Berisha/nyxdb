@@ -138,6 +138,11 @@ struct InsertStmt {
     std::vector<std::vector<ExprPtr>> rows;
 };
 
-using Statement = std::variant<SelectStmt, CreateTableStmt, InsertStmt>;
+struct DropTableStmt {
+    std::string table_name;
+    bool if_exists = false;
+};
+
+using Statement = std::variant<SelectStmt, CreateTableStmt, InsertStmt, DropTableStmt>;
 
 } // namespace nyx::ast

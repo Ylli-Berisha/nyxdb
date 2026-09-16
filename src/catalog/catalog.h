@@ -30,6 +30,7 @@ class Catalog {
 
     Result<void> add_table(const std::string& name, Schema schema);
     Result<u64> insert(const std::string& table_name, const std::vector<std::vector<Value>>& rows);
+    Result<void> drop_table(const std::string& name, bool if_exists = false);
     Result<void> flush_all();
 
   private:

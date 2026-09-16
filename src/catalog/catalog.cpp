@@ -231,6 +231,26 @@ Result<u64> Catalog::insert(const std::string& table_name,
     return ir;
 }
 
+Result<void> Catalog::drop_table(const std::string& name, bool if_exists) {
+    std::string canonical = canonicalize(name);
+    auto it = tables_.find(canonical);
+    if (it == tables_.end()) {
+        if (if_exists)
+            return Result<void>::ok();
+        return Result<void>::err("catalog: table '" + name + "' does not exist");
+    }
+    std::string dir = it->second.dir();
+    auto r = flush_all();
+    if (r.is_err())
+        return r;
+    tables_.erase(canonical);
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    if (ec)
+        return Result<void>::err("drop_table: remove_all failed: " + ec.message());
+    return Result<void>::ok();
+}
+
 Result<void> Catalog::flush_all() {
     for (auto& [name, tbl] : tables_) {
         auto r = tbl.flush();
