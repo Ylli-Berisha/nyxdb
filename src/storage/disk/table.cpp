@@ -1,6 +1,11 @@
 #include "storage/disk/table.h"
 
+#include <cerrno>
+#include <cstring>
+#include <fcntl.h>
 #include <filesystem>
+#include <sys/stat.h>
+#include <unistd.h>
 #include <unordered_set>
 #include <utility>
 
@@ -8,9 +13,51 @@ namespace nyx {
 
 namespace fs = std::filesystem;
 
-Table::Table(std::string dir, std::string name, Schema schema, std::vector<ColumnFile> columns)
+static std::string deleted_bin_path(const std::string& dir) {
+    return dir + "/deleted.bin";
+}
+
+static std::vector<u8> load_deleted_bitmap(const std::string& dir) {
+    int fd = ::open(deleted_bin_path(dir).c_str(), O_RDONLY);
+    if (fd < 0)
+        return {};
+    struct stat st {};
+    ::fstat(fd, &st);
+    std::vector<u8> bm(static_cast<size_t>(st.st_size));
+    if (!bm.empty()) {
+        ssize_t n = ::read(fd, bm.data(), bm.size());
+        if (n != static_cast<ssize_t>(bm.size()))
+            bm.clear();
+    }
+    ::close(fd);
+    return bm;
+}
+
+static Result<void> write_deleted_bitmap(const std::string& dir, const std::vector<u8>& bm) {
+    std::string path = deleted_bin_path(dir);
+    if (bm.empty()) {
+        ::unlink(path.c_str());
+        return Result<void>::ok();
+    }
+    int fd = ::open(path.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd < 0)
+        return Result<void>::err("write_deleted_bitmap: open failed: " +
+                                 std::string(strerror(errno)));
+    ssize_t n = ::write(fd, bm.data(), bm.size());
+    if (::fsync(fd) != 0) {
+        ::close(fd);
+        return Result<void>::err("write_deleted_bitmap: fsync failed");
+    }
+    ::close(fd);
+    if (n != static_cast<ssize_t>(bm.size()))
+        return Result<void>::err("write_deleted_bitmap: short write");
+    return Result<void>::ok();
+}
+
+Table::Table(std::string dir, std::string name, Schema schema, std::vector<ColumnFile> columns,
+             std::vector<u8> deleted_bitmap)
     : dir_(std::move(dir)), name_(std::move(name)), schema_(std::move(schema)),
-      columns_(std::move(columns)) {}
+      columns_(std::move(columns)), deleted_bitmap_(std::move(deleted_bitmap)) {}
 
 static Result<void> validate_schema(const Schema& schema) {
     if (schema.empty())
@@ -65,7 +112,8 @@ Result<Table> Table::create(const std::string& data_root, const std::string& nam
         columns.push_back(std::move(cf_res.value()));
     }
 
-    return Result<Table>::ok(Table(dir_path.string(), name, std::move(schema), std::move(columns)));
+    return Result<Table>::ok(
+        Table(dir_path.string(), name, std::move(schema), std::move(columns), {}));
 }
 
 Result<Table> Table::open(const std::string& data_root, const std::string& name) {
@@ -95,7 +143,9 @@ Result<Table> Table::open(const std::string& data_root, const std::string& name)
         columns.push_back(std::move(cf));
     }
 
-    return Result<Table>::ok(Table(dir_path.string(), name, std::move(schema), std::move(columns)));
+    auto bm = load_deleted_bitmap(dir_path.string());
+    return Result<Table>::ok(
+        Table(dir_path.string(), name, std::move(schema), std::move(columns), std::move(bm)));
 }
 
 u64 Table::row_count() const {
@@ -166,6 +216,25 @@ Result<u64> Table::insert_many(const std::vector<std::vector<Value>>& rows) {
     }
 
     return Result<u64>::ok(static_cast<u64>(rows.size()));
+}
+
+Result<void> Table::mark_deleted(const std::vector<u64>& row_indices) {
+    if (row_indices.empty())
+        return Result<void>::ok();
+    u64 total = row_count();
+    size_t bytes_needed = static_cast<size_t>((total + 7) / 8);
+    if (deleted_bitmap_.size() < bytes_needed)
+        deleted_bitmap_.resize(bytes_needed, 0);
+    for (u64 idx : row_indices) {
+        if (idx < total)
+            deleted_bitmap_[idx / 8] |= static_cast<u8>(1u << (idx % 8));
+    }
+    return write_deleted_bitmap(dir_, deleted_bitmap_);
+}
+
+Result<void> Table::clear_deletions() {
+    deleted_bitmap_.clear();
+    return write_deleted_bitmap(dir_, deleted_bitmap_);
 }
 
 Result<void> Table::truncate(u64 target_rows) {

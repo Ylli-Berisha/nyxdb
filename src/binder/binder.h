@@ -25,6 +25,7 @@ class Binder {
     Result<bound::BoundInsert> bind_insert(const ast::InsertStmt& stmt, std::string_view source);
     Result<bound::BoundDropTable> bind_drop_table(const ast::DropTableStmt& stmt,
                                                   std::string_view source);
+    Result<bound::BoundDelete> bind_delete(const ast::DeleteStmt& stmt, std::string_view source);
     Result<bound::BoundStatement> bind(const ast::Statement& stmt, std::string_view source);
 
   private:

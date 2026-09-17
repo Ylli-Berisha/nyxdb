@@ -70,6 +70,7 @@ enum class TokenKind : u8 {
     KW_DROP,
     KW_IF,
     KW_EXISTS,
+    KW_DELETE,
 
     END_OF_FILE,
 };

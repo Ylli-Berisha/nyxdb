@@ -10,5 +10,6 @@ namespace nyx::frontend {
 Result<void> run_create_table(Catalog& catalog, const bound::BoundCreateTable& stmt);
 Result<u64> run_insert(Catalog& catalog, const bound::BoundInsert& stmt);
 Result<void> run_drop_table(Catalog& catalog, const bound::BoundDropTable& stmt);
+Result<u64> run_delete(Catalog& catalog, const bound::BoundDelete& stmt);
 
 } // namespace nyx::frontend

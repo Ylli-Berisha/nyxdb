@@ -11,13 +11,14 @@
 namespace nyx {
 
 struct WalRecord {
-    enum class Type : u8 { Insert = 0x01, CreateTable = 0x02 };
+    enum class Type : u8 { Insert = 0x01, CreateTable = 0x02, Delete = 0x03 };
 
     Type type;
     u64 byte_offset;
     std::string table_name;
     Schema schema;
     std::vector<std::vector<Value>> rows;
+    std::vector<u64> row_indices;
 };
 
 class WalReader {

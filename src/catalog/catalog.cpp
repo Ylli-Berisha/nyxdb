@@ -8,6 +8,7 @@
 #include <cstring>
 #include <fcntl.h>
 #include <filesystem>
+#include <numeric>
 #include <unistd.h>
 #include <utility>
 
@@ -161,6 +162,22 @@ Result<Catalog> Catalog::load(const std::string& data_root) {
                                         "': " + r.error().message);
     }
 
+    for (const auto& rec : records) {
+        if (rec.type != WalRecord::Type::Delete)
+            continue;
+        std::string canonical = canonicalize(rec.table_name);
+        auto it = cat.tables_.find(canonical);
+        if (it == cat.tables_.end())
+            continue;
+        auto lsn_it = lsns.find(canonical);
+        if (lsn_it != lsns.end() && rec.byte_offset < lsn_it->second.lsn)
+            continue;
+        auto r = it->second.mark_deleted(rec.row_indices);
+        if (r.is_err())
+            return Result<Catalog>::err("catalog: wal replay delete '" + rec.table_name +
+                                        "': " + r.error().message);
+    }
+
     for (auto& [name, tbl] : cat.tables_) {
         auto r = tbl.flush();
         if (r.is_err())
@@ -229,6 +246,42 @@ Result<u64> Catalog::insert(const std::string& table_name,
     }
 
     return ir;
+}
+
+Result<u64> Catalog::delete_rows(const std::string& name, const std::vector<u64>& row_indices) {
+    if (row_indices.empty())
+        return Result<u64>::ok(0);
+    std::string canonical = canonicalize(name);
+    auto it = tables_.find(canonical);
+    if (it == tables_.end())
+        return Result<u64>::err("delete: table not found: " + name);
+
+    auto ew = ensure_wal_();
+    if (ew.is_err())
+        return Result<u64>::err(ew.error().message);
+
+    auto lw = wal_->log_delete(canonical, row_indices);
+    if (lw.is_err())
+        return Result<u64>::err(lw.error().message);
+
+    auto r = it->second.mark_deleted(row_indices);
+    if (r.is_err())
+        return Result<u64>::err(r.error().message);
+
+    return Result<u64>::ok(static_cast<u64>(row_indices.size()));
+}
+
+Result<u64> Catalog::delete_all(const std::string& name) {
+    std::string canonical = canonicalize(name);
+    auto it = tables_.find(canonical);
+    if (it == tables_.end())
+        return Result<u64>::err("delete: table not found: " + name);
+    u64 count = it->second.row_count();
+    if (count == 0)
+        return Result<u64>::ok(0);
+    std::vector<u64> all(static_cast<size_t>(count));
+    std::iota(all.begin(), all.end(), u64{0});
+    return delete_rows(name, all);
 }
 
 Result<void> Catalog::drop_table(const std::string& name, bool if_exists) {

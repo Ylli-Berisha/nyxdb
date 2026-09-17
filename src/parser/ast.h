@@ -143,6 +143,11 @@ struct DropTableStmt {
     bool if_exists = false;
 };
 
-using Statement = std::variant<SelectStmt, CreateTableStmt, InsertStmt, DropTableStmt>;
+struct DeleteStmt {
+    std::string table_name;
+    ExprPtr where;
+};
+
+using Statement = std::variant<SelectStmt, CreateTableStmt, InsertStmt, DropTableStmt, DeleteStmt>;
 
 } // namespace nyx::ast

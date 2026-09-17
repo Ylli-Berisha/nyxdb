@@ -310,6 +310,12 @@ Result<bound::BoundStatement> Binder::bind(const ast::Statement& stmt, std::stri
                 if (r.is_err())
                     return Result<bound::BoundStatement>::err(r.error());
                 return Result<bound::BoundStatement>::ok(std::move(r.value()));
+            } else {
+                static_assert(std::is_same_v<T, ast::DeleteStmt>);
+                auto r = bind_delete(s, source);
+                if (r.is_err())
+                    return Result<bound::BoundStatement>::err(r.error());
+                return Result<bound::BoundStatement>::ok(std::move(r.value()));
             }
         },
         stmt);
@@ -322,6 +328,28 @@ Result<bound::BoundDropTable> Binder::bind_drop_table(const ast::DropTableStmt& 
         return Result<bound::BoundDropTable>::err(
             err_msg_("unknown table: " + stmt.table_name, SourceLoc{0, 0}));
     return Result<bound::BoundDropTable>::ok({stmt.table_name, stmt.if_exists});
+}
+
+Result<bound::BoundDelete> Binder::bind_delete(const ast::DeleteStmt& stmt,
+                                               std::string_view source) {
+    source_ = source;
+    const Schema* schema = catalog_.schema_of(stmt.table_name);
+    if (!schema)
+        return Result<bound::BoundDelete>::err(
+            err_msg_("unknown table: " + stmt.table_name, SourceLoc{0, 0}));
+
+    bound::BoundDelete out;
+    out.table_name = stmt.table_name;
+    out.schema = *schema;
+
+    if (stmt.where) {
+        std::vector<bound::BoundBinding> bindings = {{stmt.table_name, stmt.table_name, schema}};
+        auto e = bind_expression(*stmt.where, bindings, source);
+        if (e.is_err())
+            return Result<bound::BoundDelete>::err(e.error());
+        out.where = std::move(e.value());
+    }
+    return Result<bound::BoundDelete>::ok(std::move(out));
 }
 
 Result<bound::BoundInsert> Binder::bind_insert(const ast::InsertStmt& stmt,

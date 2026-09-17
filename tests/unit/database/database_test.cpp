@@ -103,6 +103,62 @@ TEST_F(DatabaseTest, OrderByAndLimit) {
     EXPECT_EQ(std::get<i32>(r.value().columns[0][1]), 2);
 }
 
+TEST_F(DatabaseTest, DeleteAllRows) {
+    ASSERT_TRUE(db_->execute("INSERT INTO users VALUES (1, 1.0), (2, 2.0), (3, 3.0)").is_ok());
+    auto r = db_->execute("DELETE FROM users");
+    ASSERT_TRUE(r.is_ok()) << r.error().message;
+    EXPECT_EQ(r.value().rows_affected, 3u);
+    auto sel = db_->execute("SELECT id FROM users");
+    ASSERT_TRUE(sel.is_ok());
+    EXPECT_EQ(sel.value().row_count(), 0u);
+}
+
+TEST_F(DatabaseTest, DeleteWithWhere) {
+    ASSERT_TRUE(db_->execute("INSERT INTO users VALUES (1, 1.0), (2, 2.0), (3, 3.0)").is_ok());
+    auto r = db_->execute("DELETE FROM users WHERE id = 2");
+    ASSERT_TRUE(r.is_ok()) << r.error().message;
+    EXPECT_EQ(r.value().rows_affected, 1u);
+    auto sel = db_->execute("SELECT id FROM users");
+    ASSERT_TRUE(sel.is_ok());
+    EXPECT_EQ(sel.value().row_count(), 2u);
+}
+
+TEST_F(DatabaseTest, DeleteNoMatchWhere) {
+    ASSERT_TRUE(db_->execute("INSERT INTO users VALUES (1, 1.0), (2, 2.0)").is_ok());
+    auto r = db_->execute("DELETE FROM users WHERE id = 99");
+    ASSERT_TRUE(r.is_ok()) << r.error().message;
+    EXPECT_EQ(r.value().rows_affected, 0u);
+    auto sel = db_->execute("SELECT id FROM users");
+    ASSERT_TRUE(sel.is_ok());
+    EXPECT_EQ(sel.value().row_count(), 2u);
+}
+
+TEST_F(DatabaseTest, DeleteUnknownTable) {
+    auto r = db_->execute("DELETE FROM ghost");
+    ASSERT_TRUE(r.is_err());
+}
+
+TEST_F(DatabaseTest, DeletePersists) {
+    ASSERT_TRUE(db_->execute("INSERT INTO users VALUES (1, 1.0), (2, 2.0), (3, 3.0)").is_ok());
+    ASSERT_TRUE(db_->execute("DELETE FROM users WHERE id = 2").is_ok());
+    db_.reset();
+    auto r = Database::open("/tmp/nyxdb_database_test");
+    ASSERT_TRUE(r.is_ok());
+    auto db2 = std::make_unique<Database>(std::move(r.value()));
+    auto sel = db2->execute("SELECT id FROM users");
+    ASSERT_TRUE(sel.is_ok()) << sel.error().message;
+    EXPECT_EQ(sel.value().row_count(), 2u);
+}
+
+TEST_F(DatabaseTest, DeleteThenInsert) {
+    ASSERT_TRUE(db_->execute("INSERT INTO users VALUES (1, 1.0), (2, 2.0)").is_ok());
+    ASSERT_TRUE(db_->execute("DELETE FROM users WHERE id = 1").is_ok());
+    ASSERT_TRUE(db_->execute("INSERT INTO users VALUES (3, 3.0)").is_ok());
+    auto sel = db_->execute("SELECT id FROM users");
+    ASSERT_TRUE(sel.is_ok()) << sel.error().message;
+    EXPECT_EQ(sel.value().row_count(), 2u);
+}
+
 TEST_F(DatabaseTest, DropTableOk) {
     auto r = db_->execute("DROP TABLE users");
     ASSERT_TRUE(r.is_ok()) << r.error().message;

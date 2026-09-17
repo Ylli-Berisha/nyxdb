@@ -39,13 +39,20 @@ class Table {
     Result<void> flush();
     Result<void> fsync();
 
+    bool has_deletions() const { return !deleted_bitmap_.empty(); }
+    const std::vector<u8>& deleted_bitmap() const { return deleted_bitmap_; }
+    Result<void> mark_deleted(const std::vector<u64>& row_indices);
+    Result<void> clear_deletions();
+
   private:
-    Table(std::string dir, std::string name, Schema schema, std::vector<ColumnFile> columns);
+    Table(std::string dir, std::string name, Schema schema, std::vector<ColumnFile> columns,
+          std::vector<u8> deleted_bitmap);
 
     std::string dir_;
     std::string name_;
     Schema schema_;
     std::vector<ColumnFile> columns_;
+    std::vector<u8> deleted_bitmap_;
 };
 
 } // namespace nyx

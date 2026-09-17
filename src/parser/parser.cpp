@@ -284,6 +284,12 @@ Result<ast::Statement> Parser::parse_one_statement_() {
             return Result<ast::Statement>::err(r.error().message);
         return Result<ast::Statement>::ok(ast::Statement{std::move(r.value())});
     }
+    case TokenKind::KW_DELETE: {
+        auto r = parse_delete_();
+        if (r.is_err())
+            return Result<ast::Statement>::err(r.error().message);
+        return Result<ast::Statement>::ok(ast::Statement{std::move(r.value())});
+    }
     default:
         return Result<ast::Statement>::err(err_msg_("expected statement", peek_()));
     }
@@ -627,6 +633,25 @@ Result<ast::DropTableStmt> Parser::parse_drop_table_() {
     if (peek_().kind != TokenKind::IDENTIFIER)
         return Result<ast::DropTableStmt>::err(err_msg_("expected table name", peek_()));
     return Result<ast::DropTableStmt>::ok({consume_().text, if_exists});
+}
+
+Result<ast::DeleteStmt> Parser::parse_delete_() {
+    consume_();
+    if (!match_(TokenKind::KW_FROM))
+        return Result<ast::DeleteStmt>::err(err_msg_("expected FROM", peek_()));
+    if (peek_().kind != TokenKind::IDENTIFIER)
+        return Result<ast::DeleteStmt>::err(err_msg_("expected table name", peek_()));
+    std::string tbl = consume_().text;
+
+    ast::DeleteStmt stmt;
+    stmt.table_name = std::move(tbl);
+    if (match_(TokenKind::KW_WHERE)) {
+        auto e = parse_expr_();
+        if (e.is_err())
+            return Result<ast::DeleteStmt>::err(e.error().message);
+        stmt.where = std::move(e.value());
+    }
+    return Result<ast::DeleteStmt>::ok(std::move(stmt));
 }
 
 } // namespace nyx

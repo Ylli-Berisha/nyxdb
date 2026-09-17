@@ -53,6 +53,7 @@ class TableScan : public Operator {
     size_t cur_range_ = 0;
     u64 cur_row_ = 0;
 
+    bool use_survivors_ = false;
     bool opened_ = false;
 };
 

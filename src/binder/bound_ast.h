@@ -137,7 +137,14 @@ struct BoundDropTable {
     bool if_exists = false;
 };
 
-using BoundStatement = std::variant<BoundSelect, BoundCreateTable, BoundInsert, BoundDropTable>;
+struct BoundDelete {
+    std::string table_name;
+    Schema schema;
+    BoundExprPtr where;
+};
+
+using BoundStatement =
+    std::variant<BoundSelect, BoundCreateTable, BoundInsert, BoundDropTable, BoundDelete>;
 
 TypeId bound_expr_type(const BoundExpr& e);
 bool bound_expr_nullable(const BoundExpr& e);

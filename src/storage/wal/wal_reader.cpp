@@ -67,7 +67,8 @@ Result<std::vector<WalRecord>> WalReader::read_all() {
         if (r < 0)
             break;
 
-        if (type_byte != WAL_TYPE_INSERT && type_byte != WAL_TYPE_CREATE)
+        if (type_byte != WAL_TYPE_INSERT && type_byte != WAL_TYPE_CREATE &&
+            type_byte != WAL_TYPE_DELETE)
             break;
 
         u64 record_start = pos;
@@ -125,6 +126,28 @@ Result<std::vector<WalRecord>> WalReader::read_all() {
                 pos += cname_len;
 
                 rec.schema.push_back({std::move(cname), type_id, nullable, max_len});
+            }
+            if (!ok)
+                break;
+
+        } else if (type_byte == WAL_TYPE_DELETE) {
+            u8 cnt_bytes[8];
+            if (!read_exact(fd_, cnt_bytes, 8))
+                break;
+            payload.insert(payload.end(), cnt_bytes, cnt_bytes + 8);
+            pos += 8;
+
+            u64 idx_count = wal_read_u64(cnt_bytes);
+            bool ok = true;
+            for (u64 i = 0; i < idx_count && ok; ++i) {
+                u8 idx_bytes[8];
+                if (!read_exact(fd_, idx_bytes, 8)) {
+                    ok = false;
+                    break;
+                }
+                payload.insert(payload.end(), idx_bytes, idx_bytes + 8);
+                pos += 8;
+                rec.row_indices.push_back(wal_read_u64(idx_bytes));
             }
             if (!ok)
                 break;

@@ -104,15 +104,38 @@ TableScan::TableScan(Table* table, std::vector<size_t> projected, ScanRange rang
 }
 
 Result<void> TableScan::open() {
-    if (!range_.has_value()) {
-        next_row_ = 0;
-        total_rows_ = table_->row_count();
-        opened_ = true;
-        return Result<void>::ok();
+    total_rows_ = table_->row_count();
+
+    if (range_.has_value()) {
+        auto r = compute_survivors();
+        if (r.is_err())
+            return r;
+        use_survivors_ = true;
     }
-    auto r = compute_survivors();
-    if (r.is_err())
-        return r;
+
+    if (table_->has_deletions()) {
+        if (!range_.has_value())
+            survivors_.emplace_back(0, total_rows_);
+
+        const auto& bm = table_->deleted_bitmap();
+        std::vector<std::pair<u64, u64>> refined;
+        for (auto [start, end] : survivors_) {
+            u64 r = start;
+            while (r < end) {
+                while (r < end && ((bm[r / 8] >> (r % 8)) & 1u))
+                    ++r;
+                if (r >= end)
+                    break;
+                u64 s = r;
+                while (r < end && !((bm[r / 8] >> (r % 8)) & 1u))
+                    ++r;
+                refined.emplace_back(s, r);
+            }
+        }
+        survivors_ = std::move(refined);
+        use_survivors_ = true;
+    }
+
     cur_range_ = 0;
     cur_row_ = survivors_.empty() ? 0 : survivors_[0].first;
     opened_ = true;
@@ -148,7 +171,7 @@ Result<void> TableScan::compute_survivors() {
 
 Result<std::optional<Chunk>> TableScan::next() {
     assert(opened_);
-    if (!range_.has_value())
+    if (!use_survivors_)
         return next_no_range();
     return next_with_survivors();
 }

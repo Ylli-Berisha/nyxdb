@@ -164,6 +164,26 @@ Result<void> WalWriter::log_create_table(const std::string& table, const Schema&
     return write_record(buf);
 }
 
+Result<void> WalWriter::log_delete(const std::string& table, const std::vector<u64>& row_indices) {
+    std::vector<u8> buf;
+    buf.push_back(WAL_TYPE_DELETE);
+
+    u8 tmp[8];
+    wal_put_u16(tmp, static_cast<u16>(table.size()));
+    buf.insert(buf.end(), tmp, tmp + 2);
+    buf.insert(buf.end(), table.begin(), table.end());
+
+    wal_put_u64(tmp, static_cast<u64>(row_indices.size()));
+    buf.insert(buf.end(), tmp, tmp + 8);
+
+    for (u64 idx : row_indices) {
+        wal_put_u64(tmp, idx);
+        buf.insert(buf.end(), tmp, tmp + 8);
+    }
+
+    return write_record(buf);
+}
+
 Result<void> WalWriter::checkpoint() {
     if (fd_ >= 0) {
         ::close(fd_);
