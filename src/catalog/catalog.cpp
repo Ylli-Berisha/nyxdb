@@ -283,12 +283,31 @@ Result<u64> Catalog::insert(const std::string& table_name,
     if (lw.is_err())
         return Result<u64>::err(lw.error().message);
 
+    auto idx_it = indexes_.find(canonical);
+    if (idx_it != indexes_.end()) {
+        for (auto& btree : idx_it->second) {
+            if (!btree.is_unique()) continue;
+            const auto& cidxs = btree.col_indices();
+            std::vector<byte> key_buf(btree.key_size());
+            for (usize i = 0; i < rows.size(); ++i) {
+                std::vector<Value> key_vals(cidxs.size());
+                for (usize k = 0; k < cidxs.size(); ++k)
+                    key_vals[k] = rows[i][cidxs[k]];
+                btree.encode_key(key_vals, key_buf.data());
+                bool found = false;
+                btree.range_scan(key_buf.data(), true, key_buf.data(), true,
+                                 [&](u64) { found = true; return false; });
+                if (found)
+                    return Result<u64>::err("unique constraint violation");
+            }
+        }
+    }
+
     u64 first_row_id = it->second.row_count();
     auto ir = it->second.insert_many(rows);
     if (ir.is_err())
         return ir;
 
-    auto idx_it = indexes_.find(canonical);
     if (idx_it != indexes_.end()) {
         for (auto& btree : idx_it->second) {
             const auto& cidxs = btree.col_indices();
