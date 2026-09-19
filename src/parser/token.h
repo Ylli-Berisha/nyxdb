@@ -79,6 +79,10 @@ enum class TokenKind : u8 {
     KW_FALSE,
     KW_DATE,
     KW_TIMESTAMP,
+    KW_INDEX,
+    KW_UNIQUE,
+    KW_SHOW,
+    KW_INDEXES,
 
     END_OF_FILE,
 };

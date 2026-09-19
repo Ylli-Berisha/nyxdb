@@ -41,6 +41,9 @@ class Parser {
     Result<ast::DropTableStmt> parse_drop_table_();
     Result<ast::DeleteStmt> parse_delete_();
     Result<ast::UpdateStmt> parse_update_();
+    Result<ast::CreateIndexStmt> parse_create_index_();
+    Result<ast::DropIndexStmt> parse_drop_index_();
+    Result<ast::ShowIndexesStmt> parse_show_indexes_();
 
     Result<ast::Statement> parse_one_statement_();
 
