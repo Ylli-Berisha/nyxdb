@@ -140,6 +140,16 @@ const char* token_kind_name(TokenKind kind) {
         return "SHOW";
     case TokenKind::KW_INDEXES:
         return "INDEXES";
+    case TokenKind::KW_PRIMARY:
+        return "PRIMARY";
+    case TokenKind::KW_KEY:
+        return "KEY";
+    case TokenKind::KW_DEFAULT:
+        return "DEFAULT";
+    case TokenKind::KW_CONSTRAINT:
+        return "CONSTRAINT";
+    case TokenKind::KW_CONSTRAINTS:
+        return "CONSTRAINTS";
     case TokenKind::END_OF_FILE:
         return "EOF";
     }
@@ -195,6 +205,11 @@ static const std::unordered_map<std::string, TokenKind>& keyword_table() {
         {"unique", TokenKind::KW_UNIQUE},
         {"show", TokenKind::KW_SHOW},
         {"indexes", TokenKind::KW_INDEXES},
+        {"primary", TokenKind::KW_PRIMARY},
+        {"key", TokenKind::KW_KEY},
+        {"default", TokenKind::KW_DEFAULT},
+        {"constraint", TokenKind::KW_CONSTRAINT},
+        {"constraints", TokenKind::KW_CONSTRAINTS},
     };
     return table;
 }

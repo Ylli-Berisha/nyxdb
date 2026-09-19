@@ -439,9 +439,14 @@ Result<bound::BoundStatement> Binder::bind(const ast::Statement& stmt, std::stri
                 if (r.is_err())
                     return Result<bound::BoundStatement>::err(r.error());
                 return Result<bound::BoundStatement>::ok(std::move(r.value()));
-            } else {
-                static_assert(std::is_same_v<T, ast::ShowIndexesStmt>);
+            } else if constexpr (std::is_same_v<T, ast::ShowIndexesStmt>) {
                 auto r = bind_show_indexes(s, source);
+                if (r.is_err())
+                    return Result<bound::BoundStatement>::err(r.error());
+                return Result<bound::BoundStatement>::ok(std::move(r.value()));
+            } else {
+                static_assert(std::is_same_v<T, ast::ShowConstraintsStmt>);
+                auto r = bind_show_constraints_(s, source);
                 if (r.is_err())
                     return Result<bound::BoundStatement>::err(r.error());
                 return Result<bound::BoundStatement>::ok(std::move(r.value()));
@@ -577,9 +582,14 @@ Result<bound::BoundInsert> Binder::bind_insert(const ast::InsertStmt& stmt,
         }
 
         for (u32 i = 0; i < schema_size; ++i) {
-            if (!(*schema)[i].nullable && is_null(schema_row[i]))
-                return Result<bound::BoundInsert>::err(
-                    err_msg_("NULL into NOT NULL column: " + (*schema)[i].name, SourceLoc{0, 0}));
+            if (is_null(schema_row[i])) {
+                if ((*schema)[i].default_value.has_value()) {
+                    schema_row[i] = *(*schema)[i].default_value;
+                } else if (!(*schema)[i].nullable) {
+                    return Result<bound::BoundInsert>::err(err_msg_(
+                        "NULL into NOT NULL column: " + (*schema)[i].name, SourceLoc{0, 0}));
+                }
+            }
         }
 
         rows.push_back(std::move(schema_row));
@@ -646,9 +656,91 @@ Result<bound::BoundCreateTable> Binder::bind_create_table(const ast::CreateTable
         if (!seen.insert(col.name).second)
             return Result<bound::BoundCreateTable>::err(
                 err_msg_("duplicate column name: " + col.name, SourceLoc{0, 0}));
-        schema.push_back({col.name, col.type, col.nullable, col.max_len});
+        schema.push_back({col.name, col.type, col.nullable, col.max_len, col.default_value});
     }
-    return Result<bound::BoundCreateTable>::ok({stmt.table_name, std::move(schema)});
+
+    std::vector<bound::BoundConstraint> constraints;
+    bool has_pk = false;
+
+    auto add_constraint = [&](ast::TableConstraint::Kind kind, const std::string& cname,
+                              const std::vector<std::string>& col_names) -> Result<void> {
+        if (kind == ast::TableConstraint::PRIMARY_KEY) {
+            if (has_pk)
+                return Result<void>::err(
+                    err_msg_("table can have only one PRIMARY KEY", SourceLoc{0, 0}));
+            has_pk = true;
+        }
+        std::vector<u8> col_indices;
+        for (const auto& cn : col_names) {
+            bool found = false;
+            for (u32 i = 0; i < static_cast<u32>(schema.size()); ++i) {
+                if (schema[i].name == cn) {
+                    if (schema[i].type == TypeId::BOOL)
+                        return Result<void>::err(
+                            err_msg_("cannot index BOOL column: " + cn, SourceLoc{0, 0}));
+                    if (kind == ast::TableConstraint::PRIMARY_KEY)
+                        schema[i].nullable = false;
+                    col_indices.push_back(static_cast<u8>(i));
+                    found = true;
+                    break;
+                }
+            }
+            if (!found)
+                return Result<void>::err(
+                    err_msg_("unknown column in constraint: " + cn, SourceLoc{0, 0}));
+        }
+        ConstraintKind ck = (kind == ast::TableConstraint::PRIMARY_KEY)
+                                ? ConstraintKind::PRIMARY_KEY
+                                : ConstraintKind::UNIQUE;
+        constraints.push_back({ck, cname, std::move(col_indices)});
+        return Result<void>::ok();
+    };
+
+    for (u32 i = 0; i < static_cast<u32>(stmt.columns.size()); ++i) {
+        const auto& col = stmt.columns[i];
+        std::string col_name = col.name;
+        if (col.is_primary_key) {
+            if (col.type == TypeId::BOOL)
+                return Result<bound::BoundCreateTable>::err(
+                    err_msg_("cannot index BOOL column: " + col_name, SourceLoc{0, 0}));
+            if (has_pk)
+                return Result<bound::BoundCreateTable>::err(
+                    err_msg_("table can have only one PRIMARY KEY", SourceLoc{0, 0}));
+            has_pk = true;
+            schema[i].nullable = false;
+            constraints.push_back(
+                {ConstraintKind::PRIMARY_KEY, "pk_" + stmt.table_name, {static_cast<u8>(i)}});
+        }
+        if (col.is_unique) {
+            if (col.type == TypeId::BOOL)
+                return Result<bound::BoundCreateTable>::err(
+                    err_msg_("cannot index BOOL column: " + col_name, SourceLoc{0, 0}));
+            constraints.push_back({ConstraintKind::UNIQUE,
+                                   "uq_" + stmt.table_name + "_" + col_name,
+                                   {static_cast<u8>(i)}});
+        }
+    }
+
+    for (const auto& tc : stmt.constraints) {
+        std::string auto_name;
+        if (tc.name.empty()) {
+            if (tc.kind == ast::TableConstraint::PRIMARY_KEY) {
+                auto_name = "pk_" + stmt.table_name;
+            } else {
+                auto_name = "uq_" + stmt.table_name;
+                for (const auto& cn : tc.columns)
+                    auto_name += "_" + cn;
+            }
+        } else {
+            auto_name = tc.name;
+        }
+        auto r = add_constraint(tc.kind, auto_name, tc.columns);
+        if (r.is_err())
+            return Result<bound::BoundCreateTable>::err(r.error());
+    }
+
+    return Result<bound::BoundCreateTable>::ok(
+        {stmt.table_name, std::move(schema), std::move(constraints)});
 }
 
 Result<bound::BoundSelect> Binder::bind_select(const ast::SelectStmt& stmt,
@@ -916,6 +1008,15 @@ Result<bound::BoundShowIndexes> Binder::bind_show_indexes(const ast::ShowIndexes
         return Result<bound::BoundShowIndexes>::err(
             err_msg_("unknown table: " + stmt.table_name, SourceLoc{0, 0}));
     return Result<bound::BoundShowIndexes>::ok({stmt.table_name});
+}
+
+Result<bound::BoundShowConstraints>
+Binder::bind_show_constraints_(const ast::ShowConstraintsStmt& stmt, std::string_view source) {
+    source_ = source;
+    if (!catalog_.has_table(stmt.table_name))
+        return Result<bound::BoundShowConstraints>::err(
+            err_msg_("unknown table: " + stmt.table_name, SourceLoc{0, 0}));
+    return Result<bound::BoundShowConstraints>::ok({stmt.table_name});
 }
 
 } // namespace nyx

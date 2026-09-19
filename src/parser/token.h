@@ -83,6 +83,11 @@ enum class TokenKind : u8 {
     KW_UNIQUE,
     KW_SHOW,
     KW_INDEXES,
+    KW_PRIMARY,
+    KW_KEY,
+    KW_DEFAULT,
+    KW_CONSTRAINT,
+    KW_CONSTRAINTS,
 
     END_OF_FILE,
 };

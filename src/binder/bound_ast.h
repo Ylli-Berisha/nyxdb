@@ -4,6 +4,7 @@
 #include "executor/expression.h"
 #include "executor/hash_aggregate.h"
 #include "parser/source_loc.h"
+#include "storage/disk/constraint_file.h"
 #include "storage/disk/schema.h"
 #include "storage/disk/value.h"
 
@@ -134,9 +135,16 @@ struct BoundSelect {
     bool is_aggregated = false;
 };
 
+struct BoundConstraint {
+    ConstraintKind kind;
+    std::string name;
+    std::vector<u8> col_indices;
+};
+
 struct BoundCreateTable {
     std::string table_name;
     Schema schema;
+    std::vector<BoundConstraint> constraints;
 };
 
 struct BoundInsert {
@@ -183,9 +191,13 @@ struct BoundShowIndexes {
     std::string table_name;
 };
 
-using BoundStatement =
-    std::variant<BoundSelect, BoundCreateTable, BoundInsert, BoundDropTable, BoundDelete,
-                 BoundUpdate, BoundCreateIndex, BoundDropIndex, BoundShowIndexes>;
+struct BoundShowConstraints {
+    std::string table_name;
+};
+
+using BoundStatement = std::variant<BoundSelect, BoundCreateTable, BoundInsert, BoundDropTable,
+                                    BoundDelete, BoundUpdate, BoundCreateIndex, BoundDropIndex,
+                                    BoundShowIndexes, BoundShowConstraints>;
 
 TypeId bound_expr_type(const BoundExpr& e);
 bool bound_expr_nullable(const BoundExpr& e);
