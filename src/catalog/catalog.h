@@ -33,6 +33,8 @@ class Catalog {
     Result<void> drop_table(const std::string& name, bool if_exists = false);
     Result<u64> delete_rows(const std::string& name, const std::vector<u64>& row_indices);
     Result<u64> delete_all(const std::string& name);
+    Result<u64> update_rows(const std::string& name, const std::vector<u64>& old_indices,
+                            const Schema& schema, const std::vector<std::vector<Value>>& new_rows);
     Result<void> flush_all();
 
   private:

@@ -24,6 +24,8 @@ class WalWriter {
                             const std::vector<std::vector<Value>>& rows);
     Result<void> log_create_table(const std::string& table, const Schema& schema);
     Result<void> log_delete(const std::string& table, const std::vector<u64>& row_indices);
+    Result<void> log_update(const std::string& table, const std::vector<u64>& old_indices,
+                            const Schema& schema, const std::vector<std::vector<Value>>& new_rows);
 
     u64 current_offset() const { return offset_; }
     Result<void> checkpoint();

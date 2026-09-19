@@ -147,7 +147,7 @@ Result<Catalog> Catalog::load(const std::string& data_root) {
     }
 
     for (const auto& rec : records) {
-        if (rec.type != WalRecord::Type::Insert)
+        if (rec.type == WalRecord::Type::CreateTable)
             continue;
         std::string canonical = canonicalize(rec.table_name);
         auto it = cat.tables_.find(canonical);
@@ -156,26 +156,27 @@ Result<Catalog> Catalog::load(const std::string& data_root) {
         auto lsn_it = lsns.find(canonical);
         if (lsn_it != lsns.end() && rec.byte_offset < lsn_it->second.lsn)
             continue;
-        auto r = it->second.insert_many(rec.rows);
-        if (r.is_err())
-            return Result<Catalog>::err("catalog: wal replay insert '" + rec.table_name +
-                                        "': " + r.error().message);
-    }
 
-    for (const auto& rec : records) {
-        if (rec.type != WalRecord::Type::Delete)
-            continue;
-        std::string canonical = canonicalize(rec.table_name);
-        auto it = cat.tables_.find(canonical);
-        if (it == cat.tables_.end())
-            continue;
-        auto lsn_it = lsns.find(canonical);
-        if (lsn_it != lsns.end() && rec.byte_offset < lsn_it->second.lsn)
-            continue;
-        auto r = it->second.mark_deleted(rec.row_indices);
-        if (r.is_err())
-            return Result<Catalog>::err("catalog: wal replay delete '" + rec.table_name +
-                                        "': " + r.error().message);
+        if (rec.type == WalRecord::Type::Insert) {
+            auto r = it->second.insert_many(rec.rows);
+            if (r.is_err())
+                return Result<Catalog>::err("catalog: wal replay insert '" + rec.table_name +
+                                            "': " + r.error().message);
+        } else if (rec.type == WalRecord::Type::Update) {
+            auto r = it->second.mark_deleted(rec.row_indices);
+            if (r.is_err())
+                return Result<Catalog>::err("catalog: wal replay update (delete) '" +
+                                            rec.table_name + "': " + r.error().message);
+            auto r2 = it->second.insert_many(rec.rows);
+            if (r2.is_err())
+                return Result<Catalog>::err("catalog: wal replay update (insert) '" +
+                                            rec.table_name + "': " + r2.error().message);
+        } else if (rec.type == WalRecord::Type::Delete) {
+            auto r = it->second.mark_deleted(rec.row_indices);
+            if (r.is_err())
+                return Result<Catalog>::err("catalog: wal replay delete '" + rec.table_name +
+                                            "': " + r.error().message);
+        }
     }
 
     for (auto& [name, tbl] : cat.tables_) {
@@ -269,6 +270,35 @@ Result<u64> Catalog::delete_rows(const std::string& name, const std::vector<u64>
         return Result<u64>::err(r.error().message);
 
     return Result<u64>::ok(static_cast<u64>(row_indices.size()));
+}
+
+Result<u64> Catalog::update_rows(const std::string& name, const std::vector<u64>& old_indices,
+                                 const Schema& schema,
+                                 const std::vector<std::vector<Value>>& new_rows) {
+    if (old_indices.empty())
+        return Result<u64>::ok(0);
+    std::string canonical = canonicalize(name);
+    auto it = tables_.find(canonical);
+    if (it == tables_.end())
+        return Result<u64>::err("update: table not found: " + name);
+
+    auto ew = ensure_wal_();
+    if (ew.is_err())
+        return Result<u64>::err(ew.error().message);
+
+    auto lw = wal_->log_update(canonical, old_indices, schema, new_rows);
+    if (lw.is_err())
+        return Result<u64>::err(lw.error().message);
+
+    auto dr = it->second.mark_deleted(old_indices);
+    if (dr.is_err())
+        return Result<u64>::err(dr.error().message);
+
+    auto ir = it->second.insert_many(new_rows);
+    if (ir.is_err())
+        return Result<u64>::err(ir.error().message);
+
+    return Result<u64>::ok(static_cast<u64>(old_indices.size()));
 }
 
 Result<u64> Catalog::delete_all(const std::string& name) {

@@ -148,6 +148,18 @@ struct DeleteStmt {
     ExprPtr where;
 };
 
-using Statement = std::variant<SelectStmt, CreateTableStmt, InsertStmt, DropTableStmt, DeleteStmt>;
+struct Assignment {
+    std::string column;
+    ExprPtr value;
+};
+
+struct UpdateStmt {
+    std::string table_name;
+    std::vector<Assignment> assignments;
+    ExprPtr where;
+};
+
+using Statement =
+    std::variant<SelectStmt, CreateTableStmt, InsertStmt, DropTableStmt, DeleteStmt, UpdateStmt>;
 
 } // namespace nyx::ast

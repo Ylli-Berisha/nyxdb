@@ -310,9 +310,14 @@ Result<bound::BoundStatement> Binder::bind(const ast::Statement& stmt, std::stri
                 if (r.is_err())
                     return Result<bound::BoundStatement>::err(r.error());
                 return Result<bound::BoundStatement>::ok(std::move(r.value()));
-            } else {
-                static_assert(std::is_same_v<T, ast::DeleteStmt>);
+            } else if constexpr (std::is_same_v<T, ast::DeleteStmt>) {
                 auto r = bind_delete(s, source);
+                if (r.is_err())
+                    return Result<bound::BoundStatement>::err(r.error());
+                return Result<bound::BoundStatement>::ok(std::move(r.value()));
+            } else {
+                static_assert(std::is_same_v<T, ast::UpdateStmt>);
+                auto r = bind_update(s, source);
                 if (r.is_err())
                     return Result<bound::BoundStatement>::err(r.error());
                 return Result<bound::BoundStatement>::ok(std::move(r.value()));
@@ -350,6 +355,44 @@ Result<bound::BoundDelete> Binder::bind_delete(const ast::DeleteStmt& stmt,
         out.where = std::move(e.value());
     }
     return Result<bound::BoundDelete>::ok(std::move(out));
+}
+
+Result<bound::BoundUpdate> Binder::bind_update(const ast::UpdateStmt& stmt,
+                                               std::string_view source) {
+    source_ = source;
+    const Schema* schema = catalog_.schema_of(stmt.table_name);
+    if (!schema)
+        return Result<bound::BoundUpdate>::err(
+            err_msg_("unknown table: " + stmt.table_name, SourceLoc{0, 0}));
+
+    std::vector<bound::BoundBinding> bindings = {{stmt.table_name, stmt.table_name, schema}};
+    bound::BoundUpdate out;
+    out.table_name = stmt.table_name;
+    out.schema = *schema;
+
+    for (const auto& asgn : stmt.assignments) {
+        size_t col_idx = schema->size();
+        for (size_t i = 0; i < schema->size(); ++i)
+            if ((*schema)[i].name == asgn.column) {
+                col_idx = i;
+                break;
+            }
+        if (col_idx == schema->size())
+            return Result<bound::BoundUpdate>::err(
+                err_msg_("unknown column: " + asgn.column, SourceLoc{0, 0}));
+        auto e = bind_expression(*asgn.value, bindings, source);
+        if (e.is_err())
+            return Result<bound::BoundUpdate>::err(e.error());
+        out.assignments.push_back({col_idx, std::move(e.value())});
+    }
+
+    if (stmt.where) {
+        auto e = bind_expression(*stmt.where, bindings, source);
+        if (e.is_err())
+            return Result<bound::BoundUpdate>::err(e.error());
+        out.where = std::move(e.value());
+    }
+    return Result<bound::BoundUpdate>::ok(std::move(out));
 }
 
 Result<bound::BoundInsert> Binder::bind_insert(const ast::InsertStmt& stmt,

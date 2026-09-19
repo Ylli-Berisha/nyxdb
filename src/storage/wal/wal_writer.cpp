@@ -184,6 +184,68 @@ Result<void> WalWriter::log_delete(const std::string& table, const std::vector<u
     return write_record(buf);
 }
 
+Result<void> WalWriter::log_update(const std::string& table, const std::vector<u64>& old_indices,
+                                   const Schema& schema,
+                                   const std::vector<std::vector<Value>>& new_rows) {
+    std::vector<u8> buf;
+    buf.push_back(WAL_TYPE_UPDATE);
+
+    u8 tmp[8];
+    wal_put_u16(tmp, static_cast<u16>(table.size()));
+    buf.insert(buf.end(), tmp, tmp + 2);
+    buf.insert(buf.end(), table.begin(), table.end());
+
+    wal_put_u64(tmp, static_cast<u64>(old_indices.size()));
+    buf.insert(buf.end(), tmp, tmp + 8);
+    for (u64 idx : old_indices) {
+        wal_put_u64(tmp, idx);
+        buf.insert(buf.end(), tmp, tmp + 8);
+    }
+
+    wal_put_u32(tmp, static_cast<u32>(new_rows.size()));
+    buf.insert(buf.end(), tmp, tmp + 4);
+    wal_put_u16(tmp, static_cast<u16>(schema.size()));
+    buf.insert(buf.end(), tmp, tmp + 2);
+
+    for (const auto& col : schema) {
+        buf.push_back(static_cast<u8>(col.type));
+        wal_put_u16(tmp, col.max_len);
+        buf.insert(buf.end(), tmp, tmp + 2);
+    }
+
+    for (const auto& row : new_rows) {
+        for (size_t c = 0; c < row.size(); ++c) {
+            const Value& v = row[c];
+            if (is_null(v)) {
+                buf.push_back(1);
+            } else {
+                buf.push_back(0);
+                TypeId t = schema[c].type;
+                if (t == TypeId::INT32) {
+                    wal_put_u32(tmp, static_cast<u32>(std::get<i32>(v)));
+                    buf.insert(buf.end(), tmp, tmp + 4);
+                } else if (t == TypeId::INT64) {
+                    wal_put_u64(tmp, static_cast<u64>(std::get<i64>(v)));
+                    buf.insert(buf.end(), tmp, tmp + 8);
+                } else if (t == TypeId::DOUBLE) {
+                    f64 dv = std::get<f64>(v);
+                    u64 bits;
+                    std::memcpy(&bits, &dv, 8);
+                    wal_put_u64(tmp, bits);
+                    buf.insert(buf.end(), tmp, tmp + 8);
+                } else {
+                    const std::string& s = std::get<std::string>(v);
+                    wal_put_u16(tmp, static_cast<u16>(s.size()));
+                    buf.insert(buf.end(), tmp, tmp + 2);
+                    buf.insert(buf.end(), s.begin(), s.end());
+                }
+            }
+        }
+    }
+
+    return write_record(buf);
+}
+
 Result<void> WalWriter::checkpoint() {
     if (fd_ >= 0) {
         ::close(fd_);

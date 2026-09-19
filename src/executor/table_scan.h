@@ -33,6 +33,7 @@ class TableScan : public Operator {
     Result<std::optional<Chunk>> next() override;
     void close() override {}
     const Schema& output_schema() const override { return output_schema_; }
+    u64 last_chunk_physical_start() const { return last_chunk_physical_start_; }
 
   private:
     Result<ColumnVector> read_column_range(size_t col_idx, u64 start, size_t count);
@@ -48,6 +49,7 @@ class TableScan : public Operator {
 
     u64 next_row_ = 0;
     u64 total_rows_ = 0;
+    u64 last_chunk_physical_start_ = 0;
 
     std::vector<std::pair<u64, u64>> survivors_;
     size_t cur_range_ = 0;

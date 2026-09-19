@@ -40,6 +40,7 @@ class Parser {
     Result<ast::InsertStmt> parse_insert_();
     Result<ast::DropTableStmt> parse_drop_table_();
     Result<ast::DeleteStmt> parse_delete_();
+    Result<ast::UpdateStmt> parse_update_();
 
     Result<ast::Statement> parse_one_statement_();
 

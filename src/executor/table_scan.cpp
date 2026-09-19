@@ -185,6 +185,7 @@ Result<std::optional<Chunk>> TableScan::next_no_range() {
     if (cols.is_err())
         return Result<std::optional<Chunk>>::err(cols.error().message);
 
+    last_chunk_physical_start_ = next_row_;
     next_row_ += count;
     return Result<std::optional<Chunk>>::ok(Chunk(count, std::move(cols.value())));
 }
@@ -206,6 +207,7 @@ Result<std::optional<Chunk>> TableScan::next_with_survivors() {
         if (cols.is_err())
             return Result<std::optional<Chunk>>::err(cols.error().message);
 
+        last_chunk_physical_start_ = cur_row_;
         cur_row_ += count;
         return Result<std::optional<Chunk>>::ok(Chunk(count, std::move(cols.value())));
     }

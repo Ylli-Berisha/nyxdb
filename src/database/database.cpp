@@ -82,6 +82,12 @@ Result<ExecuteResult> Database::execute(const std::string& sql) {
                     return Result<ExecuteResult>::err(r.error());
                 return Result<ExecuteResult>::ok({{}, {}, r.value()});
 
+            } else if constexpr (std::is_same_v<T, bound::BoundUpdate>) {
+                auto r = frontend::run_update(catalog_, stmt);
+                if (!r.is_ok())
+                    return Result<ExecuteResult>::err(r.error());
+                return Result<ExecuteResult>::ok({{}, {}, r.value()});
+
             } else {
                 static_assert(std::is_same_v<T, bound::BoundSelect>);
                 Planner pl(catalog_);

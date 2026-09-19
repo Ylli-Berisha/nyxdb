@@ -116,6 +116,10 @@ const char* token_kind_name(TokenKind kind) {
         return "EXISTS";
     case TokenKind::KW_DELETE:
         return "DELETE";
+    case TokenKind::KW_UPDATE:
+        return "UPDATE";
+    case TokenKind::KW_SET:
+        return "SET";
     case TokenKind::END_OF_FILE:
         return "EOF";
     }
@@ -159,6 +163,8 @@ static const std::unordered_map<std::string, TokenKind>& keyword_table() {
         {"if", TokenKind::KW_IF},
         {"exists", TokenKind::KW_EXISTS},
         {"delete", TokenKind::KW_DELETE},
+        {"update", TokenKind::KW_UPDATE},
+        {"set", TokenKind::KW_SET},
     };
     return table;
 }

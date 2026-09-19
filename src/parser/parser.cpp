@@ -290,6 +290,12 @@ Result<ast::Statement> Parser::parse_one_statement_() {
             return Result<ast::Statement>::err(r.error().message);
         return Result<ast::Statement>::ok(ast::Statement{std::move(r.value())});
     }
+    case TokenKind::KW_UPDATE: {
+        auto r = parse_update_();
+        if (r.is_err())
+            return Result<ast::Statement>::err(r.error().message);
+        return Result<ast::Statement>::ok(ast::Statement{std::move(r.value())});
+    }
     default:
         return Result<ast::Statement>::err(err_msg_("expected statement", peek_()));
     }
@@ -652,6 +658,39 @@ Result<ast::DeleteStmt> Parser::parse_delete_() {
         stmt.where = std::move(e.value());
     }
     return Result<ast::DeleteStmt>::ok(std::move(stmt));
+}
+
+Result<ast::UpdateStmt> Parser::parse_update_() {
+    consume_();
+    if (peek_().kind != TokenKind::IDENTIFIER)
+        return Result<ast::UpdateStmt>::err(err_msg_("expected table name", peek_()));
+    std::string tbl = consume_().text;
+
+    if (!match_(TokenKind::KW_SET))
+        return Result<ast::UpdateStmt>::err(err_msg_("expected SET", peek_()));
+
+    ast::UpdateStmt stmt;
+    stmt.table_name = std::move(tbl);
+
+    do {
+        if (peek_().kind != TokenKind::IDENTIFIER)
+            return Result<ast::UpdateStmt>::err(err_msg_("expected column name", peek_()));
+        std::string col = consume_().text;
+        if (!match_(TokenKind::EQ))
+            return Result<ast::UpdateStmt>::err(err_msg_("expected '='", peek_()));
+        auto e = parse_expr_();
+        if (e.is_err())
+            return Result<ast::UpdateStmt>::err(e.error().message);
+        stmt.assignments.push_back({std::move(col), std::move(e.value())});
+    } while (match_(TokenKind::COMMA));
+
+    if (match_(TokenKind::KW_WHERE)) {
+        auto e = parse_expr_();
+        if (e.is_err())
+            return Result<ast::UpdateStmt>::err(e.error().message);
+        stmt.where = std::move(e.value());
+    }
+    return Result<ast::UpdateStmt>::ok(std::move(stmt));
 }
 
 } // namespace nyx

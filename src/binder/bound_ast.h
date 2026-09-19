@@ -143,8 +143,20 @@ struct BoundDelete {
     BoundExprPtr where;
 };
 
-using BoundStatement =
-    std::variant<BoundSelect, BoundCreateTable, BoundInsert, BoundDropTable, BoundDelete>;
+struct BoundAssignment {
+    size_t col_idx;
+    BoundExprPtr expr;
+};
+
+struct BoundUpdate {
+    std::string table_name;
+    Schema schema;
+    std::vector<BoundAssignment> assignments;
+    BoundExprPtr where;
+};
+
+using BoundStatement = std::variant<BoundSelect, BoundCreateTable, BoundInsert, BoundDropTable,
+                                    BoundDelete, BoundUpdate>;
 
 TypeId bound_expr_type(const BoundExpr& e);
 bool bound_expr_nullable(const BoundExpr& e);

@@ -272,3 +272,105 @@ TEST_F(VarcharTest, MultipleStringColumns) {
     EXPECT_EQ(std::get<std::string>(r.value().columns[0][0]), "John");
     EXPECT_EQ(std::get<std::string>(r.value().columns[1][0]), "Doe");
 }
+
+TEST_F(DatabaseTest, UpdateSingleColumn) {
+    ASSERT_TRUE(db_->execute("INSERT INTO users VALUES (1, 1.0), (2, 2.0), (3, 3.0)").is_ok());
+    auto r = db_->execute("UPDATE users SET score = 99.0 WHERE id = 2");
+    ASSERT_TRUE(r.is_ok()) << r.error().message;
+    EXPECT_EQ(r.value().rows_affected, 1u);
+
+    auto sel = db_->execute("SELECT id, score FROM users WHERE id = 2");
+    ASSERT_TRUE(sel.is_ok()) << sel.error().message;
+    ASSERT_EQ(sel.value().row_count(), 1u);
+    EXPECT_DOUBLE_EQ(std::get<f64>(sel.value().columns[1][0]), 99.0);
+
+    auto sel2 = db_->execute("SELECT id FROM users");
+    ASSERT_TRUE(sel2.is_ok());
+    EXPECT_EQ(sel2.value().row_count(), 3u);
+}
+
+TEST_F(DatabaseTest, UpdateMultipleColumns) {
+    ASSERT_TRUE(db_->execute("INSERT INTO users VALUES (1, 1.0)").is_ok());
+    auto r = db_->execute("UPDATE users SET id = 42, score = 7.5");
+    ASSERT_TRUE(r.is_ok()) << r.error().message;
+    EXPECT_EQ(r.value().rows_affected, 1u);
+
+    auto sel = db_->execute("SELECT id, score FROM users");
+    ASSERT_TRUE(sel.is_ok()) << sel.error().message;
+    ASSERT_EQ(sel.value().row_count(), 1u);
+    EXPECT_EQ(std::get<i32>(sel.value().columns[0][0]), 42);
+    EXPECT_DOUBLE_EQ(std::get<f64>(sel.value().columns[1][0]), 7.5);
+}
+
+TEST_F(DatabaseTest, UpdateColumnExpr) {
+    ASSERT_TRUE(db_->execute("INSERT INTO users VALUES (1, 4.0), (2, 6.0)").is_ok());
+    auto r = db_->execute("UPDATE users SET score = score * 2.0");
+    ASSERT_TRUE(r.is_ok()) << r.error().message;
+    EXPECT_EQ(r.value().rows_affected, 2u);
+
+    auto sel = db_->execute("SELECT score FROM users ORDER BY id ASC");
+    ASSERT_TRUE(sel.is_ok()) << sel.error().message;
+    ASSERT_EQ(sel.value().row_count(), 2u);
+    EXPECT_DOUBLE_EQ(std::get<f64>(sel.value().columns[0][0]), 8.0);
+    EXPECT_DOUBLE_EQ(std::get<f64>(sel.value().columns[0][1]), 12.0);
+}
+
+TEST_F(DatabaseTest, UpdateAll) {
+    ASSERT_TRUE(db_->execute("INSERT INTO users VALUES (1, 1.0), (2, 2.0), (3, 3.0)").is_ok());
+    auto r = db_->execute("UPDATE users SET score = 0.0");
+    ASSERT_TRUE(r.is_ok()) << r.error().message;
+    EXPECT_EQ(r.value().rows_affected, 3u);
+
+    auto sel = db_->execute("SELECT score FROM users");
+    ASSERT_TRUE(sel.is_ok()) << sel.error().message;
+    ASSERT_EQ(sel.value().row_count(), 3u);
+    for (size_t i = 0; i < 3; ++i)
+        EXPECT_DOUBLE_EQ(std::get<f64>(sel.value().columns[0][i]), 0.0);
+}
+
+TEST_F(DatabaseTest, UpdateNoMatch) {
+    ASSERT_TRUE(db_->execute("INSERT INTO users VALUES (1, 1.0), (2, 2.0)").is_ok());
+    auto r = db_->execute("UPDATE users SET score = 99.0 WHERE id = 99");
+    ASSERT_TRUE(r.is_ok()) << r.error().message;
+    EXPECT_EQ(r.value().rows_affected, 0u);
+
+    auto sel = db_->execute("SELECT id FROM users");
+    ASSERT_TRUE(sel.is_ok());
+    EXPECT_EQ(sel.value().row_count(), 2u);
+}
+
+TEST_F(DatabaseTest, UpdateUnknownTable) {
+    auto r = db_->execute("UPDATE ghost SET id = 1");
+    ASSERT_TRUE(r.is_err());
+}
+
+TEST_F(DatabaseTest, UpdatePersists) {
+    ASSERT_TRUE(db_->execute("INSERT INTO users VALUES (1, 1.0), (2, 2.0)").is_ok());
+    ASSERT_TRUE(db_->execute("UPDATE users SET score = 99.0 WHERE id = 1").is_ok());
+    db_.reset();
+
+    auto r = Database::open(ROOT);
+    ASSERT_TRUE(r.is_ok());
+    auto db2 = std::make_unique<Database>(std::move(r.value()));
+    auto sel = db2->execute("SELECT score FROM users WHERE id = 1");
+    ASSERT_TRUE(sel.is_ok()) << sel.error().message;
+    ASSERT_EQ(sel.value().row_count(), 1u);
+    EXPECT_DOUBLE_EQ(std::get<f64>(sel.value().columns[0][0]), 99.0);
+}
+
+TEST_F(DatabaseTest, UpdateSkipsDeletedRows) {
+    ASSERT_TRUE(db_->execute("INSERT INTO users VALUES (1, 1.0), (2, 2.0), (3, 3.0)").is_ok());
+    ASSERT_TRUE(db_->execute("DELETE FROM users WHERE id = 2").is_ok());
+    auto r = db_->execute("UPDATE users SET score = 0.0");
+    ASSERT_TRUE(r.is_ok()) << r.error().message;
+    EXPECT_EQ(r.value().rows_affected, 2u);
+
+    auto sel = db_->execute("SELECT id FROM users");
+    ASSERT_TRUE(sel.is_ok()) << sel.error().message;
+    EXPECT_EQ(sel.value().row_count(), 2u);
+
+    auto scores = db_->execute("SELECT score FROM users");
+    ASSERT_TRUE(scores.is_ok());
+    for (size_t i = 0; i < scores.value().row_count(); ++i)
+        EXPECT_DOUBLE_EQ(std::get<f64>(scores.value().columns[0][i]), 0.0);
+}

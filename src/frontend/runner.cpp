@@ -75,7 +75,6 @@ Result<u64> run_delete(Catalog& catalog, const bound::BoundDelete& stmt) {
     auto pred_expr = to_expr(*stmt.where, 0);
 
     std::vector<u64> to_delete;
-    u64 chunk_start = 0;
 
     while (true) {
         auto nr = scan.next();
@@ -84,6 +83,7 @@ Result<u64> run_delete(Catalog& catalog, const bound::BoundDelete& stmt) {
         if (!nr.value())
             break;
         Chunk& chunk = *nr.value();
+        u64 phys_start = scan.last_chunk_physical_start();
 
         auto pred = pred_expr->evaluate(chunk);
         if (!pred.is_ok())
@@ -91,13 +91,95 @@ Result<u64> run_delete(Catalog& catalog, const bound::BoundDelete& stmt) {
 
         for (size_t r = 0; r < chunk.row_count(); ++r) {
             if (!pred.value().is_null(r) && pred.value().get_i32(r) != 0)
-                to_delete.push_back(chunk_start + static_cast<u64>(r));
+                to_delete.push_back(phys_start + static_cast<u64>(r));
         }
-
-        chunk_start += chunk.row_count();
     }
 
     return catalog.delete_rows(stmt.table_name, to_delete);
+}
+
+static Value extract_value(const ColumnVector& cv, size_t r) {
+    if (cv.is_null(r))
+        return std::monostate{};
+    switch (cv.type()) {
+    case TypeId::INT32:
+        return cv.get_i32(r);
+    case TypeId::INT64:
+        return cv.get_i64(r);
+    case TypeId::DOUBLE:
+        return cv.get_f64(r);
+    default:
+        return cv.get_str(r);
+    }
+}
+
+Result<u64> run_update(Catalog& catalog, const bound::BoundUpdate& stmt) {
+    Table* tbl = catalog.table(stmt.table_name);
+    if (!tbl)
+        return Result<u64>::err("update: table not found: " + stmt.table_name);
+
+    std::vector<size_t> all_cols(stmt.schema.size());
+    std::iota(all_cols.begin(), all_cols.end(), 0u);
+
+    TableScan scan(tbl, std::move(all_cols));
+    auto open_r = scan.open();
+    if (!open_r.is_ok())
+        return Result<u64>::err(open_r.error().message);
+
+    std::vector<std::unique_ptr<Expression>> set_exprs(stmt.schema.size());
+    for (const auto& asgn : stmt.assignments)
+        set_exprs[asgn.col_idx] = to_expr(*asgn.expr, 0);
+
+    std::unique_ptr<Expression> pred_expr;
+    if (stmt.where)
+        pred_expr = to_expr(*stmt.where, 0);
+
+    std::vector<u64> old_indices;
+    std::vector<std::vector<Value>> new_rows;
+
+    while (true) {
+        auto nr = scan.next();
+        if (!nr.is_ok())
+            return Result<u64>::err(nr.error().message);
+        if (!nr.value())
+            break;
+        Chunk& chunk = *nr.value();
+        u64 phys_start = scan.last_chunk_physical_start();
+
+        std::optional<ColumnVector> pred_col;
+        if (pred_expr) {
+            auto r = pred_expr->evaluate(chunk);
+            if (!r.is_ok())
+                return Result<u64>::err(r.error().message);
+            pred_col = std::move(r.value());
+        }
+
+        std::vector<std::optional<ColumnVector>> set_cols(stmt.schema.size());
+        for (size_t c = 0; c < stmt.schema.size(); ++c) {
+            if (!set_exprs[c])
+                continue;
+            auto r = set_exprs[c]->evaluate(chunk);
+            if (!r.is_ok())
+                return Result<u64>::err(r.error().message);
+            set_cols[c] = std::move(r.value());
+        }
+
+        for (size_t r = 0; r < chunk.row_count(); ++r) {
+            if (pred_col && (pred_col->is_null(r) || pred_col->get_i32(r) == 0))
+                continue;
+
+            old_indices.push_back(phys_start + static_cast<u64>(r));
+
+            std::vector<Value> new_row(stmt.schema.size());
+            for (size_t c = 0; c < stmt.schema.size(); ++c) {
+                new_row[c] = set_cols[c].has_value() ? extract_value(*set_cols[c], r)
+                                                     : extract_value(chunk.column(c), r);
+            }
+            new_rows.push_back(std::move(new_row));
+        }
+    }
+
+    return catalog.update_rows(stmt.table_name, old_indices, stmt.schema, new_rows);
 }
 
 } // namespace nyx::frontend

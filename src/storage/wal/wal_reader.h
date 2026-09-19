@@ -11,7 +11,7 @@
 namespace nyx {
 
 struct WalRecord {
-    enum class Type : u8 { Insert = 0x01, CreateTable = 0x02, Delete = 0x03 };
+    enum class Type : u8 { Insert = 0x01, CreateTable = 0x02, Delete = 0x03, Update = 0x04 };
 
     Type type;
     u64 byte_offset;

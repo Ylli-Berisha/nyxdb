@@ -68,7 +68,7 @@ Result<std::vector<WalRecord>> WalReader::read_all() {
             break;
 
         if (type_byte != WAL_TYPE_INSERT && type_byte != WAL_TYPE_CREATE &&
-            type_byte != WAL_TYPE_DELETE)
+            type_byte != WAL_TYPE_DELETE && type_byte != WAL_TYPE_UPDATE)
             break;
 
         u64 record_start = pos;
@@ -148,6 +148,124 @@ Result<std::vector<WalRecord>> WalReader::read_all() {
                 payload.insert(payload.end(), idx_bytes, idx_bytes + 8);
                 pos += 8;
                 rec.row_indices.push_back(wal_read_u64(idx_bytes));
+            }
+            if (!ok)
+                break;
+
+        } else if (type_byte == WAL_TYPE_UPDATE) {
+            u8 del_cnt_bytes[8];
+            if (!read_exact(fd_, del_cnt_bytes, 8))
+                break;
+            payload.insert(payload.end(), del_cnt_bytes, del_cnt_bytes + 8);
+            pos += 8;
+
+            u64 del_count = wal_read_u64(del_cnt_bytes);
+            bool ok = true;
+            for (u64 i = 0; i < del_count && ok; ++i) {
+                u8 idx_bytes[8];
+                if (!read_exact(fd_, idx_bytes, 8)) {
+                    ok = false;
+                    break;
+                }
+                payload.insert(payload.end(), idx_bytes, idx_bytes + 8);
+                pos += 8;
+                rec.row_indices.push_back(wal_read_u64(idx_bytes));
+            }
+            if (!ok)
+                break;
+
+            u8 counts[6];
+            if (!read_exact(fd_, counts, 6))
+                break;
+            payload.insert(payload.end(), counts, counts + 6);
+            pos += 6;
+
+            u32 row_count = wal_read_u32(counts);
+            u16 col_count = wal_read_u16(counts + 4);
+
+            for (u16 c = 0; c < col_count && ok; ++c) {
+                u8 col_hdr[3];
+                if (!read_exact(fd_, col_hdr, 3)) {
+                    ok = false;
+                    break;
+                }
+                payload.insert(payload.end(), col_hdr, col_hdr + 3);
+                pos += 3;
+                rec.schema.push_back(
+                    {"", static_cast<TypeId>(col_hdr[0]), false, wal_read_u16(col_hdr + 1)});
+            }
+            if (!ok)
+                break;
+
+            for (u32 row_idx = 0; row_idx < row_count && ok; ++row_idx) {
+                std::vector<Value> row;
+                for (u16 c = 0; c < col_count && ok; ++c) {
+                    u8 is_null;
+                    if (!read_exact(fd_, &is_null, 1)) {
+                        ok = false;
+                        break;
+                    }
+                    payload.push_back(is_null);
+                    pos += 1;
+
+                    if (is_null) {
+                        row.emplace_back(std::monostate{});
+                        continue;
+                    }
+
+                    TypeId t = rec.schema[c].type;
+                    if (t == TypeId::INT32) {
+                        u8 vb[4];
+                        if (!read_exact(fd_, vb, 4)) {
+                            ok = false;
+                            break;
+                        }
+                        payload.insert(payload.end(), vb, vb + 4);
+                        pos += 4;
+                        row.emplace_back(static_cast<i32>(wal_read_u32(vb)));
+                    } else if (t == TypeId::INT64) {
+                        u8 vb[8];
+                        if (!read_exact(fd_, vb, 8)) {
+                            ok = false;
+                            break;
+                        }
+                        payload.insert(payload.end(), vb, vb + 8);
+                        pos += 8;
+                        row.emplace_back(static_cast<i64>(wal_read_u64(vb)));
+                    } else if (t == TypeId::DOUBLE) {
+                        u8 vb[8];
+                        if (!read_exact(fd_, vb, 8)) {
+                            ok = false;
+                            break;
+                        }
+                        payload.insert(payload.end(), vb, vb + 8);
+                        pos += 8;
+                        u64 bits = wal_read_u64(vb);
+                        f64 dv;
+                        std::memcpy(&dv, &bits, 8);
+                        row.emplace_back(dv);
+                    } else {
+                        u8 slen_bytes[2];
+                        if (!read_exact(fd_, slen_bytes, 2)) {
+                            ok = false;
+                            break;
+                        }
+                        payload.insert(payload.end(), slen_bytes, slen_bytes + 2);
+                        pos += 2;
+                        u16 slen = wal_read_u16(slen_bytes);
+                        std::string s(slen, '\0');
+                        if (!read_exact(fd_, reinterpret_cast<u8*>(s.data()), slen)) {
+                            ok = false;
+                            break;
+                        }
+                        payload.insert(payload.end(), s.begin(), s.end());
+                        pos += slen;
+                        row.emplace_back(std::move(s));
+                    }
+                }
+                if (!ok)
+                    break;
+                rec.rows.push_back(std::move(row));
             }
             if (!ok)
                 break;
