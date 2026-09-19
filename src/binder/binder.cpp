@@ -46,6 +46,12 @@ Result<bound::BoundExprPtr> Binder::bind_expr_(const ast::Expr& e) {
                 return bind_string_lit_(n);
             else if constexpr (std::is_same_v<T, ast::NullLit>)
                 return bind_null_lit_(n);
+            else if constexpr (std::is_same_v<T, ast::BoolLit>)
+                return bind_bool_lit_(n);
+            else if constexpr (std::is_same_v<T, ast::DateLit>)
+                return bind_date_lit_(n);
+            else if constexpr (std::is_same_v<T, ast::TimestampLit>)
+                return bind_timestamp_lit_(n);
             else if constexpr (std::is_same_v<T, ast::ColumnRef>)
                 return bind_column_ref_(n);
             else if constexpr (std::is_same_v<T, ast::FuncCall>)
@@ -81,6 +87,86 @@ Result<bound::BoundExprPtr> Binder::bind_double_lit_(const ast::DoubleLit& lit) 
 Result<bound::BoundExprPtr> Binder::bind_null_lit_(const ast::NullLit& lit) {
     (void)lit;
     return Result<bound::BoundExprPtr>::ok(bound::make_bound(bound::BoundNullLit{TypeId::INT32}));
+}
+
+Result<bound::BoundExprPtr> Binder::bind_bool_lit_(const ast::BoolLit& lit) {
+    return Result<bound::BoundExprPtr>::ok(bound::make_bound(bound::BoundBoolLit{lit.value}));
+}
+
+static Result<i32> civil_to_days(int y, unsigned m, unsigned d) {
+    if (m < 1 || m > 12 || d < 1 || d > 31)
+        return Result<i32>::err("invalid date: month/day out of range");
+    int yy = y - (m <= 2 ? 1 : 0);
+    int era = (yy >= 0 ? yy : yy - 399) / 400;
+    unsigned yoe = static_cast<unsigned>(yy - era * 400);
+    unsigned doy = (153u * (m > 2 ? m - 3 : m + 9) + 2u) / 5u + d - 1u;
+    unsigned doe = yoe * 365u + yoe / 4u - yoe / 100u + doy;
+    return Result<i32>::ok(static_cast<i32>(era * 146097 + static_cast<int>(doe) - 719468));
+}
+
+static Result<i32> parse_date_string(const std::string& s) {
+    if (s.size() != 10 || s[4] != '-' || s[7] != '-')
+        return Result<i32>::err("invalid date format, expected YYYY-MM-DD");
+    try {
+        int y = std::stoi(s.substr(0, 4));
+        unsigned m = static_cast<unsigned>(std::stoi(s.substr(5, 2)));
+        unsigned d = static_cast<unsigned>(std::stoi(s.substr(8, 2)));
+        return civil_to_days(y, m, d);
+    } catch (...) {
+        return Result<i32>::err("invalid date: could not parse numeric components");
+    }
+}
+
+static Result<i64> parse_timestamp_string(const std::string& s) {
+    if (s.size() < 19 || s[4] != '-' || s[7] != '-' || (s[10] != ' ' && s[10] != 'T') ||
+        s[13] != ':' || s[16] != ':')
+        return Result<i64>::err("invalid timestamp format, expected YYYY-MM-DD HH:MM:SS[.ffffff]");
+    try {
+        int y = std::stoi(s.substr(0, 4));
+        unsigned mo = static_cast<unsigned>(std::stoi(s.substr(5, 2)));
+        unsigned d = static_cast<unsigned>(std::stoi(s.substr(8, 2)));
+        int h = std::stoi(s.substr(11, 2));
+        int mi = std::stoi(s.substr(14, 2));
+        int se = std::stoi(s.substr(17, 2));
+        i64 us = 0;
+        if (s.size() > 19) {
+            if (s[19] != '.')
+                return Result<i64>::err(
+                    "invalid timestamp: expected '.' before fractional seconds");
+            std::string frac = s.substr(20);
+            if (frac.size() > 6 || frac.empty())
+                return Result<i64>::err("invalid timestamp: fractional seconds must be 1-6 digits");
+            while (frac.size() < 6)
+                frac.push_back('0');
+            us = std::stoll(frac);
+        }
+        if (h < 0 || h > 23 || mi < 0 || mi > 59 || se < 0 || se > 59)
+            return Result<i64>::err("invalid timestamp: time component out of range");
+        auto days_r = civil_to_days(y, mo, d);
+        if (days_r.is_err())
+            return Result<i64>::err(days_r.error().message);
+        i64 days = static_cast<i64>(days_r.value());
+        i64 micros = days * 86400LL * 1000000LL + static_cast<i64>(h) * 3600LL * 1000000LL +
+                     static_cast<i64>(mi) * 60LL * 1000000LL + static_cast<i64>(se) * 1000000LL +
+                     us;
+        return Result<i64>::ok(micros);
+    } catch (...) {
+        return Result<i64>::err("invalid timestamp: could not parse numeric components");
+    }
+}
+
+Result<bound::BoundExprPtr> Binder::bind_date_lit_(const ast::DateLit& lit) {
+    auto r = parse_date_string(lit.value);
+    if (r.is_err())
+        return Result<bound::BoundExprPtr>::err(err_msg_(r.error().message, lit.loc));
+    return Result<bound::BoundExprPtr>::ok(bound::make_bound(bound::BoundDateLit{r.value()}));
+}
+
+Result<bound::BoundExprPtr> Binder::bind_timestamp_lit_(const ast::TimestampLit& lit) {
+    auto r = parse_timestamp_string(lit.value);
+    if (r.is_err())
+        return Result<bound::BoundExprPtr>::err(err_msg_(r.error().message, lit.loc));
+    return Result<bound::BoundExprPtr>::ok(bound::make_bound(bound::BoundTimestampLit{r.value()}));
 }
 
 Result<bound::BoundExprPtr> Binder::bind_column_ref_(const ast::ColumnRef& ref) {
@@ -225,6 +311,29 @@ Result<bound::BoundExprPtr> Binder::bind_binary_op_(const ast::BinaryOp& bop) {
         default:
             return Result<bound::BoundExprPtr>::err(
                 err_msg_("VARCHAR only supports comparison operators", bop.loc));
+        }
+    }
+
+    if (lt == TypeId::DATE || lt == TypeId::TIMESTAMP) {
+        switch (bop.op) {
+        case BinaryOpKind::LT:
+        case BinaryOpKind::LE:
+        case BinaryOpKind::EQ:
+        case BinaryOpKind::GE:
+        case BinaryOpKind::GT:
+        case BinaryOpKind::NE:
+            break;
+        default:
+            return Result<bound::BoundExprPtr>::err(
+                err_msg_(std::string(bound::type_name(lt)) + " only supports comparison operators",
+                         bop.loc));
+        }
+    }
+
+    if (lt == TypeId::BOOL) {
+        if (bop.op != BinaryOpKind::EQ && bop.op != BinaryOpKind::NE) {
+            return Result<bound::BoundExprPtr>::err(
+                err_msg_("BOOL only supports = and <> operators", bop.loc));
         }
     }
 
@@ -492,6 +601,24 @@ Result<Value> Binder::fold_constant_expr_(const bound::BoundExpr& e, const Colum
     }
     if (std::holds_alternative<bound::BoundNullLit>(e.node))
         return Result<Value>::ok(std::monostate{});
+    if (const auto* lit = std::get_if<bound::BoundBoolLit>(&e.node)) {
+        if (col.type != TypeId::BOOL)
+            return Result<Value>::err(
+                err_msg_("type mismatch for column: " + col.name, SourceLoc{0, 0}));
+        return Result<Value>::ok(lit->value);
+    }
+    if (const auto* lit = std::get_if<bound::BoundDateLit>(&e.node)) {
+        if (col.type != TypeId::DATE)
+            return Result<Value>::err(
+                err_msg_("type mismatch for column: " + col.name, SourceLoc{0, 0}));
+        return Result<Value>::ok(Date{lit->days});
+    }
+    if (const auto* lit = std::get_if<bound::BoundTimestampLit>(&e.node)) {
+        if (col.type != TypeId::TIMESTAMP)
+            return Result<Value>::err(
+                err_msg_("type mismatch for column: " + col.name, SourceLoc{0, 0}));
+        return Result<Value>::ok(Timestamp{lit->micros});
+    }
     return Result<Value>::err(err_msg_("INSERT values must be constants", SourceLoc{0, 0}));
 }
 
@@ -643,7 +770,10 @@ bool Binder::has_ungrouped_col_(const bound::BoundExpr& e,
                                  std::is_same_v<T, bound::BoundIntLit> ||
                                  std::is_same_v<T, bound::BoundDoubleLit> ||
                                  std::is_same_v<T, bound::BoundStringLit> ||
-                                 std::is_same_v<T, bound::BoundNullLit>) {
+                                 std::is_same_v<T, bound::BoundNullLit> ||
+                                 std::is_same_v<T, bound::BoundBoolLit> ||
+                                 std::is_same_v<T, bound::BoundDateLit> ||
+                                 std::is_same_v<T, bound::BoundTimestampLit>) {
                 return false;
             } else if constexpr (std::is_same_v<T, bound::BoundBinaryOp>) {
                 return has_ungrouped_col_(*n.left, group_by) ||

@@ -34,6 +34,21 @@ struct NullLit {
     SourceLoc loc;
 };
 
+struct BoolLit {
+    bool value;
+    SourceLoc loc;
+};
+
+struct DateLit {
+    std::string value;
+    SourceLoc loc;
+};
+
+struct TimestampLit {
+    std::string value;
+    SourceLoc loc;
+};
+
 struct ColumnRef {
     std::optional<std::string> table;
     std::string column;
@@ -73,8 +88,8 @@ struct NullCheck {
 };
 
 struct Expr {
-    std::variant<IntLit, DoubleLit, StringLit, NullLit, ColumnRef, FuncCall, BinaryOp, LogicalOp,
-                 NotOp, NullCheck>
+    std::variant<IntLit, DoubleLit, StringLit, NullLit, BoolLit, DateLit, TimestampLit, ColumnRef,
+                 FuncCall, BinaryOp, LogicalOp, NotOp, NullCheck>
         node;
 };
 

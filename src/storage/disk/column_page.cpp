@@ -160,6 +160,29 @@ Result<void> ColumnPage::append_f64(f64 v) {
     return append_typed<f64>(*this, header(), value_area(), null_bitmap(), TypeId::DOUBLE, v);
 }
 
+Result<void> ColumnPage::append_bool(bool v) {
+    ColumnPageHeader* h = header();
+    if (h->type != TypeId::BOOL)
+        return Result<void>::err("append_bool: type mismatch");
+    if (h->value_count >= h->capacity)
+        return Result<void>::err("append_bool: page full");
+    u8 byte_val = v ? 1u : 0u;
+    std::memcpy(value_area() + h->value_count, &byte_val, 1);
+    if (h->null_bitmap_bytes > 0)
+        clear_null_bit(null_bitmap(), h->value_count);
+    h->value_count++;
+    return Result<void>::ok();
+}
+
+Result<void> ColumnPage::append_date(i32 days) {
+    return append_typed<i32>(*this, header(), value_area(), null_bitmap(), TypeId::DATE, days);
+}
+
+Result<void> ColumnPage::append_timestamp(i64 micros) {
+    return append_typed<i64>(*this, header(), value_area(), null_bitmap(), TypeId::TIMESTAMP,
+                             micros);
+}
+
 Result<void> ColumnPage::append_null() {
     ColumnPageHeader* h = header();
     if (h->null_bitmap_bytes == 0)
@@ -201,6 +224,27 @@ Result<f64> ColumnPage::get_f64(u16 slot) const {
     return get_typed<f64>(*this, header(), value_area(), TypeId::DOUBLE, slot);
 }
 
+Result<bool> ColumnPage::get_bool(u16 slot) const {
+    const ColumnPageHeader* h = header();
+    if (h->type != TypeId::BOOL)
+        return Result<bool>::err("get_bool: type mismatch");
+    if (slot >= h->value_count)
+        return Result<bool>::err("get_bool: slot out of range");
+    if (is_null(slot))
+        return Result<bool>::err("get_bool: value is null");
+    u8 byte_val;
+    std::memcpy(&byte_val, value_area() + slot, 1);
+    return Result<bool>::ok(byte_val != 0);
+}
+
+Result<i32> ColumnPage::get_date(u16 slot) const {
+    return get_typed<i32>(*this, header(), value_area(), TypeId::DATE, slot);
+}
+
+Result<i64> ColumnPage::get_timestamp(u16 slot) const {
+    return get_typed<i64>(*this, header(), value_area(), TypeId::TIMESTAMP, slot);
+}
+
 template <typename T> static std::optional<T> read_min(const ColumnPageHeader* h, TypeId expected) {
     if (h->type != expected)
         return std::nullopt;
@@ -238,6 +282,18 @@ std::optional<f64> ColumnPage::min_f64() const {
 }
 std::optional<f64> ColumnPage::max_f64() const {
     return read_max<f64>(header(), TypeId::DOUBLE);
+}
+std::optional<i32> ColumnPage::min_date() const {
+    return read_min<i32>(header(), TypeId::DATE);
+}
+std::optional<i32> ColumnPage::max_date() const {
+    return read_max<i32>(header(), TypeId::DATE);
+}
+std::optional<i64> ColumnPage::min_timestamp() const {
+    return read_min<i64>(header(), TypeId::TIMESTAMP);
+}
+std::optional<i64> ColumnPage::max_timestamp() const {
+    return read_max<i64>(header(), TypeId::TIMESTAMP);
 }
 
 Result<void> ColumnPage::append_str(std::string_view s) {

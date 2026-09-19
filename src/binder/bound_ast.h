@@ -42,6 +42,18 @@ struct BoundStringLit {
     std::string value;
 };
 
+struct BoundBoolLit {
+    bool value;
+};
+
+struct BoundDateLit {
+    i32 days;
+};
+
+struct BoundTimestampLit {
+    i64 micros;
+};
+
 struct BoundColumnRef {
     BindingRef ref;
 };
@@ -80,9 +92,9 @@ struct BoundNullCheck {
 };
 
 struct BoundExpr {
-    std::variant<BoundIntLit, BoundDoubleLit, BoundStringLit, BoundNullLit, BoundColumnRef,
-                 BoundAggregateRef, BoundProjectionRef, BoundBinaryOp, BoundLogicalOp, BoundNotOp,
-                 BoundNullCheck>
+    std::variant<BoundIntLit, BoundDoubleLit, BoundStringLit, BoundNullLit, BoundBoolLit,
+                 BoundDateLit, BoundTimestampLit, BoundColumnRef, BoundAggregateRef,
+                 BoundProjectionRef, BoundBinaryOp, BoundLogicalOp, BoundNotOp, BoundNullCheck>
         node;
 };
 

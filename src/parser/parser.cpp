@@ -200,6 +200,31 @@ Result<ast::ExprPtr> Parser::parse_primary_() {
         consume_();
         return Result<ast::ExprPtr>::ok(ast::make_expr(ast::NullLit{tok.loc}));
     }
+    case TokenKind::KW_TRUE: {
+        consume_();
+        return Result<ast::ExprPtr>::ok(ast::make_expr(ast::BoolLit{true, tok.loc}));
+    }
+    case TokenKind::KW_FALSE: {
+        consume_();
+        return Result<ast::ExprPtr>::ok(ast::make_expr(ast::BoolLit{false, tok.loc}));
+    }
+    case TokenKind::KW_DATE: {
+        consume_();
+        if (peek_().kind != TokenKind::STRING_LITERAL)
+            return Result<ast::ExprPtr>::err(err_msg_("expected date string after DATE", peek_()));
+        Token str_tok = consume_();
+        SourceLoc combined = combine_loc(tok.loc, str_tok.loc);
+        return Result<ast::ExprPtr>::ok(ast::make_expr(ast::DateLit{str_tok.text, combined}));
+    }
+    case TokenKind::KW_TIMESTAMP: {
+        consume_();
+        if (peek_().kind != TokenKind::STRING_LITERAL)
+            return Result<ast::ExprPtr>::err(
+                err_msg_("expected timestamp string after TIMESTAMP", peek_()));
+        Token str_tok = consume_();
+        SourceLoc combined = combine_loc(tok.loc, str_tok.loc);
+        return Result<ast::ExprPtr>::ok(ast::make_expr(ast::TimestampLit{str_tok.text, combined}));
+    }
     case TokenKind::LPAREN: {
         consume_();
         auto r = parse_expr_();
@@ -566,6 +591,19 @@ Result<ast::ColumnDef> Parser::parse_column_def_() {
         }
         break;
     }
+    case TokenKind::KW_BOOL:
+    case TokenKind::KW_BOOLEAN:
+        def.type = TypeId::BOOL;
+        consume_();
+        break;
+    case TokenKind::KW_DATE:
+        def.type = TypeId::DATE;
+        consume_();
+        break;
+    case TokenKind::KW_TIMESTAMP:
+        def.type = TypeId::TIMESTAMP;
+        consume_();
+        break;
     default:
         return Result<ast::ColumnDef>::err(err_msg_("expected column type", peek_()));
     }

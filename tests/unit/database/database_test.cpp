@@ -374,3 +374,113 @@ TEST_F(DatabaseTest, UpdateSkipsDeletedRows) {
     for (size_t i = 0; i < scores.value().row_count(); ++i)
         EXPECT_DOUBLE_EQ(std::get<f64>(scores.value().columns[0][i]), 0.0);
 }
+
+class TypesTest : public ::testing::Test {
+  protected:
+    void SetUp() override {
+        fs::remove_all(ROOT);
+        auto r = Database::open(ROOT);
+        ASSERT_TRUE(r.is_ok()) << r.error().message;
+        db_ = std::make_unique<Database>(std::move(r.value()));
+    }
+    void TearDown() override { fs::remove_all(ROOT); }
+    std::unique_ptr<Database> db_;
+    static const std::string ROOT;
+};
+const std::string TypesTest::ROOT = "/tmp/nyxdb_types_test";
+
+TEST_F(TypesTest, BoolInsertSelect) {
+    ASSERT_TRUE(db_->execute("CREATE TABLE flags (id INT, active BOOL)").is_ok());
+    ASSERT_TRUE(db_->execute("INSERT INTO flags VALUES (1, TRUE), (2, FALSE)").is_ok());
+    auto r = db_->execute("SELECT id, active FROM flags");
+    ASSERT_TRUE(r.is_ok()) << r.error().message;
+    ASSERT_EQ(r.value().row_count(), 2u);
+    EXPECT_EQ(std::get<bool>(r.value().columns[1][0]), true);
+    EXPECT_EQ(std::get<bool>(r.value().columns[1][1]), false);
+}
+
+TEST_F(TypesTest, BoolWhere) {
+    ASSERT_TRUE(db_->execute("CREATE TABLE flags (id INT, active BOOL)").is_ok());
+    ASSERT_TRUE(db_->execute("INSERT INTO flags VALUES (1, TRUE), (2, FALSE), (3, TRUE)").is_ok());
+    auto r = db_->execute("SELECT id FROM flags WHERE active = TRUE");
+    ASSERT_TRUE(r.is_ok()) << r.error().message;
+    EXPECT_EQ(r.value().row_count(), 2u);
+}
+
+TEST_F(TypesTest, DateInsertSelect) {
+    ASSERT_TRUE(db_->execute("CREATE TABLE events (id INT, day DATE)").is_ok());
+    ASSERT_TRUE(db_->execute("INSERT INTO events VALUES (1, DATE '2024-01-15')").is_ok());
+    auto r = db_->execute("SELECT day FROM events");
+    ASSERT_TRUE(r.is_ok()) << r.error().message;
+    ASSERT_EQ(r.value().row_count(), 1u);
+    Date d = std::get<Date>(r.value().columns[0][0]);
+    // 2024-01-15 = 19737 days since 1970-01-01
+    EXPECT_EQ(d.days, 19737);
+}
+
+TEST_F(TypesTest, DateComparison) {
+    ASSERT_TRUE(db_->execute("CREATE TABLE events (id INT, day DATE)").is_ok());
+    ASSERT_TRUE(db_->execute("INSERT INTO events VALUES "
+                             "(1, DATE '2023-12-31'), (2, DATE '2024-01-15'), "
+                             "(3, DATE '2024-06-01')")
+                    .is_ok());
+    auto r = db_->execute("SELECT id FROM events WHERE day > DATE '2024-01-01'");
+    ASSERT_TRUE(r.is_ok()) << r.error().message;
+    EXPECT_EQ(r.value().row_count(), 2u);
+}
+
+TEST_F(TypesTest, TimestampInsertSelect) {
+    ASSERT_TRUE(db_->execute("CREATE TABLE events (id INT, ts TIMESTAMP)").is_ok());
+    ASSERT_TRUE(
+        db_->execute("INSERT INTO events VALUES (1, TIMESTAMP '2024-01-15 10:30:00')").is_ok());
+    auto r = db_->execute("SELECT ts FROM events");
+    ASSERT_TRUE(r.is_ok()) << r.error().message;
+    ASSERT_EQ(r.value().row_count(), 1u);
+    Timestamp ts = std::get<Timestamp>(r.value().columns[0][0]);
+    // 2024-01-15 10:30:00 = 19737 * 86400 + 10*3600 + 30*60 = 1705314600 seconds
+    EXPECT_EQ(ts.micros, 1705314600000000LL);
+}
+
+TEST_F(TypesTest, TimestampComparison) {
+    ASSERT_TRUE(db_->execute("CREATE TABLE events (id INT, ts TIMESTAMP)").is_ok());
+    ASSERT_TRUE(db_->execute("INSERT INTO events VALUES "
+                             "(1, TIMESTAMP '2024-01-01 00:00:00'), "
+                             "(2, TIMESTAMP '2024-06-15 12:00:00'), "
+                             "(3, TIMESTAMP '2025-01-01 00:00:00')")
+                    .is_ok());
+    auto r = db_->execute("SELECT id FROM events WHERE ts < TIMESTAMP '2025-01-01 00:00:00'");
+    ASSERT_TRUE(r.is_ok()) << r.error().message;
+    EXPECT_EQ(r.value().row_count(), 2u);
+}
+
+TEST_F(TypesTest, MixedTypes) {
+    ASSERT_TRUE(db_->execute("CREATE TABLE m (id INT, ok BOOL, d DATE, ts TIMESTAMP)").is_ok());
+    ASSERT_TRUE(db_->execute("INSERT INTO m VALUES "
+                             "(1, TRUE, DATE '2024-01-15', TIMESTAMP '2024-01-15 10:30:00')")
+                    .is_ok());
+    auto r = db_->execute("SELECT id, ok, d, ts FROM m");
+    ASSERT_TRUE(r.is_ok()) << r.error().message;
+    ASSERT_EQ(r.value().row_count(), 1u);
+    EXPECT_EQ(std::get<i32>(r.value().columns[0][0]), 1);
+    EXPECT_EQ(std::get<bool>(r.value().columns[1][0]), true);
+    EXPECT_EQ(std::get<Date>(r.value().columns[2][0]).days, 19737);
+    EXPECT_EQ(std::get<Timestamp>(r.value().columns[3][0]).micros, 1705314600000000LL);
+}
+
+TEST_F(TypesTest, TypesPersist) {
+    ASSERT_TRUE(db_->execute("CREATE TABLE t (b BOOL, d DATE, ts TIMESTAMP)").is_ok());
+    ASSERT_TRUE(
+        db_->execute(
+               "INSERT INTO t VALUES (TRUE, DATE '2024-01-15', TIMESTAMP '2024-01-15 10:30:00')")
+            .is_ok());
+    db_.reset();
+    auto r = Database::open(ROOT);
+    ASSERT_TRUE(r.is_ok());
+    auto db2 = std::make_unique<Database>(std::move(r.value()));
+    auto sel = db2->execute("SELECT b, d, ts FROM t");
+    ASSERT_TRUE(sel.is_ok()) << sel.error().message;
+    ASSERT_EQ(sel.value().row_count(), 1u);
+    EXPECT_EQ(std::get<bool>(sel.value().columns[0][0]), true);
+    EXPECT_EQ(std::get<Date>(sel.value().columns[1][0]).days, 19737);
+    EXPECT_EQ(std::get<Timestamp>(sel.value().columns[2][0]).micros, 1705314600000000LL);
+}

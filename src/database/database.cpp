@@ -21,6 +21,12 @@ static Value extract(const ColumnVector& col, size_t row) {
         return col.get_i64(row);
     case TypeId::VARCHAR:
         return col.get_str(row);
+    case TypeId::BOOL:
+        return col.get_bool(row);
+    case TypeId::DATE:
+        return col.get_date(row);
+    case TypeId::TIMESTAMP:
+        return col.get_timestamp(row);
     default:
         return col.get_f64(row);
     }

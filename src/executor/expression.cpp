@@ -1,6 +1,7 @@
 #include "executor/expression.h"
 
 #include <cassert>
+#include <cstring>
 #include <functional>
 #include <utility>
 #include <variant>
@@ -9,26 +10,16 @@ namespace nyx {
 
 namespace {
 
-template <typename T> T get_at(const ColumnVector& c, size_t i);
-template <> i32 get_at<i32>(const ColumnVector& c, size_t i) {
-    return c.get_i32(i);
-}
-template <> i64 get_at<i64>(const ColumnVector& c, size_t i) {
-    return c.get_i64(i);
-}
-template <> f64 get_at<f64>(const ColumnVector& c, size_t i) {
-    return c.get_f64(i);
+template <typename T> T get_at(const ColumnVector& c, size_t i) {
+    T v;
+    std::memcpy(&v, c.data() + i * sizeof(T), sizeof(T));
+    return v;
 }
 
-template <typename T> void set_at(ColumnVector& c, size_t i, T v);
-template <> void set_at<i32>(ColumnVector& c, size_t i, i32 v) {
-    c.set_i32(i, v);
-}
-template <> void set_at<i64>(ColumnVector& c, size_t i, i64 v) {
-    c.set_i64(i, v);
-}
-template <> void set_at<f64>(ColumnVector& c, size_t i, f64 v) {
-    c.set_f64(i, v);
+template <typename T> void set_at(ColumnVector& c, size_t i, T v) {
+    std::memcpy(c.data() + i * sizeof(T), &v, sizeof(T));
+    if (c.nullable())
+        c.null_bitmap_data()[i / 8] &= ~(1u << (i % 8));
 }
 
 template <typename T, typename Op>
@@ -120,6 +111,12 @@ TypeId variant_type(const Value& v) {
         return TypeId::DOUBLE;
     if (std::holds_alternative<std::string>(v))
         return TypeId::VARCHAR;
+    if (std::holds_alternative<bool>(v))
+        return TypeId::BOOL;
+    if (std::holds_alternative<Date>(v))
+        return TypeId::DATE;
+    if (std::holds_alternative<Timestamp>(v))
+        return TypeId::TIMESTAMP;
     return TypeId::INVALID;
 }
 
@@ -171,6 +168,18 @@ Result<ColumnVector> Literal::evaluate(const Chunk& input) {
         const std::string& v = std::get<std::string>(value_);
         for (size_t i = 0; i < n; ++i)
             out.set_str(i, v);
+    } else if (type_ == TypeId::BOOL) {
+        bool v = std::get<bool>(value_);
+        for (size_t i = 0; i < n; ++i)
+            out.set_bool(i, v);
+    } else if (type_ == TypeId::DATE) {
+        Date v = std::get<Date>(value_);
+        for (size_t i = 0; i < n; ++i)
+            out.set_date(i, v);
+    } else if (type_ == TypeId::TIMESTAMP) {
+        Timestamp v = std::get<Timestamp>(value_);
+        for (size_t i = 0; i < n; ++i)
+            out.set_timestamp(i, v);
     } else {
         f64 v = std::get<f64>(value_);
         for (size_t i = 0; i < n; ++i)
@@ -185,8 +194,11 @@ BinaryOp::BinaryOp(BinaryOpKind op, std::unique_ptr<Expression> left,
       output_type_(is_comparison(op) ? TypeId::INT32 : input_type_) {
     assert(left_->output_type() == right_->output_type());
     assert(input_type_ == TypeId::INT32 || input_type_ == TypeId::INT64 ||
-           input_type_ == TypeId::DOUBLE || input_type_ == TypeId::VARCHAR);
-    if (input_type_ == TypeId::VARCHAR)
+           input_type_ == TypeId::DOUBLE || input_type_ == TypeId::VARCHAR ||
+           input_type_ == TypeId::BOOL || input_type_ == TypeId::DATE ||
+           input_type_ == TypeId::TIMESTAMP);
+    if (input_type_ == TypeId::VARCHAR || input_type_ == TypeId::BOOL ||
+        input_type_ == TypeId::DATE || input_type_ == TypeId::TIMESTAMP)
         assert(is_comparison(op_));
 }
 
@@ -208,6 +220,12 @@ Result<ColumnVector> BinaryOp::evaluate(const Chunk& input) {
         return binary_dispatch<i64>(op_, l, r, TypeId::INT64);
     case TypeId::DOUBLE:
         return binary_dispatch<f64>(op_, l, r, TypeId::DOUBLE);
+    case TypeId::BOOL:
+        return binary_dispatch<u8>(op_, l, r, TypeId::BOOL);
+    case TypeId::DATE:
+        return binary_dispatch<i32>(op_, l, r, TypeId::DATE);
+    case TypeId::TIMESTAMP:
+        return binary_dispatch<i64>(op_, l, r, TypeId::TIMESTAMP);
     case TypeId::VARCHAR:
         switch (op_) {
         case BinaryOpKind::LT:

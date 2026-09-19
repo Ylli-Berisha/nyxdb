@@ -61,6 +61,9 @@ class ColumnFile {
     Result<void> append_f64(f64 v);
     Result<void> append_null();
     Result<void> append_str(std::string_view s);
+    Result<void> append_bool(bool v);
+    Result<void> append_date(i32 days);
+    Result<void> append_timestamp(i64 micros);
 
     Result<void> append_bulk(const std::vector<Value>& values);
 
@@ -68,6 +71,9 @@ class ColumnFile {
     Result<i64> get_i64(u64 row_id);
     Result<f64> get_f64(u64 row_id);
     std::string get_str(u64 row_id);
+    Result<bool> get_bool(u64 row_id);
+    Result<i32> get_date(u64 row_id);
+    Result<i64> get_timestamp(u64 row_id);
     bool is_null(u64 row_id);
 
     Result<void> scan(std::function<void(const ColumnPage&)> fn);

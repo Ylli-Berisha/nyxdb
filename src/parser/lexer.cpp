@@ -120,6 +120,18 @@ const char* token_kind_name(TokenKind kind) {
         return "UPDATE";
     case TokenKind::KW_SET:
         return "SET";
+    case TokenKind::KW_BOOL:
+        return "BOOL";
+    case TokenKind::KW_BOOLEAN:
+        return "BOOLEAN";
+    case TokenKind::KW_TRUE:
+        return "TRUE";
+    case TokenKind::KW_FALSE:
+        return "FALSE";
+    case TokenKind::KW_DATE:
+        return "DATE";
+    case TokenKind::KW_TIMESTAMP:
+        return "TIMESTAMP";
     case TokenKind::END_OF_FILE:
         return "EOF";
     }
@@ -165,6 +177,12 @@ static const std::unordered_map<std::string, TokenKind>& keyword_table() {
         {"delete", TokenKind::KW_DELETE},
         {"update", TokenKind::KW_UPDATE},
         {"set", TokenKind::KW_SET},
+        {"bool", TokenKind::KW_BOOL},
+        {"boolean", TokenKind::KW_BOOLEAN},
+        {"true", TokenKind::KW_TRUE},
+        {"false", TokenKind::KW_FALSE},
+        {"date", TokenKind::KW_DATE},
+        {"timestamp", TokenKind::KW_TIMESTAMP},
     };
     return table;
 }

@@ -34,7 +34,48 @@ static std::string fmt_value(const Value& v) {
                 return "NULL";
             else if constexpr (std::is_same_v<T, i32> || std::is_same_v<T, i64>)
                 return std::to_string(x);
-            else {
+            else if constexpr (std::is_same_v<T, bool>)
+                return x ? "TRUE" : "FALSE";
+            else if constexpr (std::is_same_v<T, Date>) {
+                i64 z = x.days + 719468;
+                i64 era = (z >= 0 ? z : z - 146096) / 146097;
+                unsigned doe = static_cast<unsigned>(z - era * 146097);
+                unsigned yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+                int y = static_cast<int>(yoe) + static_cast<int>(era) * 400;
+                unsigned doy = doe - (365u * yoe + yoe / 4u - yoe / 100u);
+                unsigned mp = (5u * doy + 2u) / 153u;
+                unsigned d = doy - (153u * mp + 2u) / 5u + 1u;
+                unsigned m = mp < 10 ? mp + 3 : mp - 9;
+                y += (m <= 2 ? 1 : 0);
+                char buf[16];
+                std::snprintf(buf, sizeof(buf), "%04d-%02u-%02u", y, m, d);
+                return buf;
+            } else if constexpr (std::is_same_v<T, Timestamp>) {
+                i64 total_us = x.micros;
+                i64 days_i = total_us / (86400LL * 1000000LL);
+                i64 rem = total_us - days_i * 86400LL * 1000000LL;
+                if (rem < 0) {
+                    rem += 86400LL * 1000000LL;
+                    --days_i;
+                }
+                Date d{static_cast<i32>(days_i)};
+                std::ostringstream date_oss;
+                date_oss << fmt_value(Value{d});
+                i64 secs_total = rem / 1000000LL;
+                i64 us_part = rem % 1000000LL;
+                int h = static_cast<int>(secs_total / 3600);
+                int mi = static_cast<int>((secs_total % 3600) / 60);
+                int se = static_cast<int>(secs_total % 60);
+                char buf[64];
+                if (us_part == 0)
+                    std::snprintf(buf, sizeof(buf), "%s %02d:%02d:%02d", date_oss.str().c_str(), h,
+                                  mi, se);
+                else
+                    std::snprintf(buf, sizeof(buf), "%s %02d:%02d:%02d.%06lld",
+                                  date_oss.str().c_str(), h, mi, se,
+                                  static_cast<long long>(us_part));
+                return buf;
+            } else {
                 std::ostringstream oss;
                 oss << x;
                 return oss.str();

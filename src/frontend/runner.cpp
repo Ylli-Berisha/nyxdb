@@ -48,6 +48,12 @@ static std::unique_ptr<Expression> to_expr(const bound::BoundExpr& e, u32 bindin
                                                    to_expr(*n.right, binding_offset));
             } else if constexpr (std::is_same_v<T, bound::BoundNotOp>) {
                 return std::make_unique<NotOp>(to_expr(*n.child, binding_offset));
+            } else if constexpr (std::is_same_v<T, bound::BoundBoolLit>) {
+                return std::make_unique<Literal>(Value{n.value});
+            } else if constexpr (std::is_same_v<T, bound::BoundDateLit>) {
+                return std::make_unique<Literal>(Value{Date{n.days}});
+            } else if constexpr (std::is_same_v<T, bound::BoundTimestampLit>) {
+                return std::make_unique<Literal>(Value{Timestamp{n.micros}});
             } else {
                 static_assert(std::is_same_v<T, bound::BoundNullCheck>);
                 return std::make_unique<NullCheckOp>(n.kind, to_expr(*n.child, binding_offset));
@@ -108,6 +114,12 @@ static Value extract_value(const ColumnVector& cv, size_t r) {
         return cv.get_i64(r);
     case TypeId::DOUBLE:
         return cv.get_f64(r);
+    case TypeId::BOOL:
+        return cv.get_bool(r);
+    case TypeId::DATE:
+        return cv.get_date(r);
+    case TypeId::TIMESTAMP:
+        return cv.get_timestamp(r);
     default:
         return cv.get_str(r);
     }

@@ -73,6 +73,12 @@ enum class TokenKind : u8 {
     KW_DELETE,
     KW_UPDATE,
     KW_SET,
+    KW_BOOL,
+    KW_BOOLEAN,
+    KW_TRUE,
+    KW_FALSE,
+    KW_DATE,
+    KW_TIMESTAMP,
 
     END_OF_FILE,
 };

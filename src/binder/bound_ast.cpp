@@ -14,6 +14,12 @@ const char* type_name(TypeId t) {
         return "DOUBLE";
     case TypeId::VARCHAR:
         return "VARCHAR";
+    case TypeId::BOOL:
+        return "BOOL";
+    case TypeId::DATE:
+        return "DATE";
+    case TypeId::TIMESTAMP:
+        return "TIMESTAMP";
     default:
         return "?";
     }
@@ -31,6 +37,12 @@ TypeId bound_expr_type(const BoundExpr& e) {
                 return TypeId::VARCHAR;
             else if constexpr (std::is_same_v<T, BoundNullLit>)
                 return n.type;
+            else if constexpr (std::is_same_v<T, BoundBoolLit>)
+                return TypeId::BOOL;
+            else if constexpr (std::is_same_v<T, BoundDateLit>)
+                return TypeId::DATE;
+            else if constexpr (std::is_same_v<T, BoundTimestampLit>)
+                return TypeId::TIMESTAMP;
             else if constexpr (std::is_same_v<T, BoundColumnRef>)
                 return n.ref.type;
             else if constexpr (std::is_same_v<T, BoundAggregateRef>)
@@ -61,6 +73,12 @@ bool bound_expr_nullable(const BoundExpr& e) {
                 return false;
             else if constexpr (std::is_same_v<T, BoundNullLit>)
                 return true;
+            else if constexpr (std::is_same_v<T, BoundBoolLit>)
+                return false;
+            else if constexpr (std::is_same_v<T, BoundDateLit>)
+                return false;
+            else if constexpr (std::is_same_v<T, BoundTimestampLit>)
+                return false;
             else if constexpr (std::is_same_v<T, BoundColumnRef>)
                 return n.ref.nullable;
             else if constexpr (std::is_same_v<T, BoundAggregateRef>)

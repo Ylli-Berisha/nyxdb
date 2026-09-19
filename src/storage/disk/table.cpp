@@ -178,6 +178,12 @@ Result<u64> Table::insert(const std::vector<Value>& row) {
             r = col.append_i64(std::get<i64>(v));
         } else if (col_schema.type == TypeId::DOUBLE && std::holds_alternative<f64>(v)) {
             r = col.append_f64(std::get<f64>(v));
+        } else if (col_schema.type == TypeId::BOOL && std::holds_alternative<bool>(v)) {
+            r = col.append_bool(std::get<bool>(v));
+        } else if (col_schema.type == TypeId::DATE && std::holds_alternative<Date>(v)) {
+            r = col.append_date(std::get<Date>(v).days);
+        } else if (col_schema.type == TypeId::TIMESTAMP && std::holds_alternative<Timestamp>(v)) {
+            r = col.append_timestamp(std::get<Timestamp>(v).micros);
         } else {
             return Result<u64>::err("insert col " + col_schema.name +
                                     ": value type does not match schema type");

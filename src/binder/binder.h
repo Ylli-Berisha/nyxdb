@@ -35,6 +35,9 @@ class Binder {
     Result<bound::BoundExprPtr> bind_double_lit_(const ast::DoubleLit& lit);
     Result<bound::BoundExprPtr> bind_string_lit_(const ast::StringLit& lit);
     Result<bound::BoundExprPtr> bind_null_lit_(const ast::NullLit& lit);
+    Result<bound::BoundExprPtr> bind_bool_lit_(const ast::BoolLit& lit);
+    Result<bound::BoundExprPtr> bind_date_lit_(const ast::DateLit& lit);
+    Result<bound::BoundExprPtr> bind_timestamp_lit_(const ast::TimestampLit& lit);
     Result<bound::BoundExprPtr> bind_column_ref_(const ast::ColumnRef& ref);
     Result<bound::BoundExprPtr> bind_func_call_(const ast::FuncCall& fc);
     Result<bound::BoundExprPtr> bind_binary_op_(const ast::BinaryOp& bop);

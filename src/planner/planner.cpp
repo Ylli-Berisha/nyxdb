@@ -52,6 +52,12 @@ std::unique_ptr<Expression> Planner::lower_expr_(const bound::BoundExpr& e, cons
                                                    lower_expr_(*n.right, ctx, projs));
             } else if constexpr (std::is_same_v<T, bound::BoundNotOp>) {
                 return std::make_unique<NotOp>(lower_expr_(*n.child, ctx, projs));
+            } else if constexpr (std::is_same_v<T, bound::BoundBoolLit>) {
+                return std::make_unique<Literal>(Value{n.value});
+            } else if constexpr (std::is_same_v<T, bound::BoundDateLit>) {
+                return std::make_unique<Literal>(Value{Date{n.days}});
+            } else if constexpr (std::is_same_v<T, bound::BoundTimestampLit>) {
+                return std::make_unique<Literal>(Value{Timestamp{n.micros}});
             } else {
                 static_assert(std::is_same_v<T, bound::BoundNullCheck>);
                 return std::make_unique<NullCheckOp>(n.kind, lower_expr_(*n.child, ctx, projs));

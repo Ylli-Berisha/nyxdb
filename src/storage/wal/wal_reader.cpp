@@ -244,6 +244,33 @@ Result<std::vector<WalRecord>> WalReader::read_all() {
                         f64 dv;
                         std::memcpy(&dv, &bits, 8);
                         row.emplace_back(dv);
+                    } else if (t == TypeId::BOOL) {
+                        u8 vb;
+                        if (!read_exact(fd_, &vb, 1)) {
+                            ok = false;
+                            break;
+                        }
+                        payload.push_back(vb);
+                        pos += 1;
+                        row.emplace_back(vb != 0);
+                    } else if (t == TypeId::DATE) {
+                        u8 vb[4];
+                        if (!read_exact(fd_, vb, 4)) {
+                            ok = false;
+                            break;
+                        }
+                        payload.insert(payload.end(), vb, vb + 4);
+                        pos += 4;
+                        row.emplace_back(Date{static_cast<i32>(wal_read_u32(vb))});
+                    } else if (t == TypeId::TIMESTAMP) {
+                        u8 vb[8];
+                        if (!read_exact(fd_, vb, 8)) {
+                            ok = false;
+                            break;
+                        }
+                        payload.insert(payload.end(), vb, vb + 8);
+                        pos += 8;
+                        row.emplace_back(Timestamp{static_cast<i64>(wal_read_u64(vb))});
                     } else {
                         u8 slen_bytes[2];
                         if (!read_exact(fd_, slen_bytes, 2)) {
@@ -342,6 +369,33 @@ Result<std::vector<WalRecord>> WalReader::read_all() {
                         f64 dv;
                         std::memcpy(&dv, &bits, 8);
                         row.emplace_back(dv);
+                    } else if (t == TypeId::BOOL) {
+                        u8 vb;
+                        if (!read_exact(fd_, &vb, 1)) {
+                            ok = false;
+                            break;
+                        }
+                        payload.push_back(vb);
+                        pos += 1;
+                        row.emplace_back(vb != 0);
+                    } else if (t == TypeId::DATE) {
+                        u8 vb[4];
+                        if (!read_exact(fd_, vb, 4)) {
+                            ok = false;
+                            break;
+                        }
+                        payload.insert(payload.end(), vb, vb + 4);
+                        pos += 4;
+                        row.emplace_back(Date{static_cast<i32>(wal_read_u32(vb))});
+                    } else if (t == TypeId::TIMESTAMP) {
+                        u8 vb[8];
+                        if (!read_exact(fd_, vb, 8)) {
+                            ok = false;
+                            break;
+                        }
+                        payload.insert(payload.end(), vb, vb + 8);
+                        pos += 8;
+                        row.emplace_back(Timestamp{static_cast<i64>(wal_read_u64(vb))});
                     } else {
                         u8 slen_bytes[2];
                         if (!read_exact(fd_, slen_bytes, 2)) {

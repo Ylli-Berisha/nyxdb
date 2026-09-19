@@ -127,6 +127,14 @@ Result<void> WalWriter::log_insert(const std::string& table, const Schema& schem
                     std::memcpy(&bits, &dv, 8);
                     wal_put_u64(tmp, bits);
                     buf.insert(buf.end(), tmp, tmp + 8);
+                } else if (t == TypeId::BOOL) {
+                    buf.push_back(std::get<bool>(v) ? 1u : 0u);
+                } else if (t == TypeId::DATE) {
+                    wal_put_u32(tmp, static_cast<u32>(std::get<Date>(v).days));
+                    buf.insert(buf.end(), tmp, tmp + 4);
+                } else if (t == TypeId::TIMESTAMP) {
+                    wal_put_u64(tmp, static_cast<u64>(std::get<Timestamp>(v).micros));
+                    buf.insert(buf.end(), tmp, tmp + 8);
                 } else {
                     const std::string& s = std::get<std::string>(v);
                     wal_put_u16(tmp, static_cast<u16>(s.size()));
@@ -232,6 +240,14 @@ Result<void> WalWriter::log_update(const std::string& table, const std::vector<u
                     u64 bits;
                     std::memcpy(&bits, &dv, 8);
                     wal_put_u64(tmp, bits);
+                    buf.insert(buf.end(), tmp, tmp + 8);
+                } else if (t == TypeId::BOOL) {
+                    buf.push_back(std::get<bool>(v) ? 1u : 0u);
+                } else if (t == TypeId::DATE) {
+                    wal_put_u32(tmp, static_cast<u32>(std::get<Date>(v).days));
+                    buf.insert(buf.end(), tmp, tmp + 4);
+                } else if (t == TypeId::TIMESTAMP) {
+                    wal_put_u64(tmp, static_cast<u64>(std::get<Timestamp>(v).micros));
                     buf.insert(buf.end(), tmp, tmp + 8);
                 } else {
                     const std::string& s = std::get<std::string>(v);

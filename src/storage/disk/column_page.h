@@ -62,11 +62,17 @@ class ColumnPage {
     Result<void> append_f64(f64 v);
     Result<void> append_null();
     Result<void> append_str(std::string_view s);
+    Result<void> append_bool(bool v);
+    Result<void> append_date(i32 days);
+    Result<void> append_timestamp(i64 micros);
 
     Result<i32> get_i32(u16 slot) const;
     Result<i64> get_i64(u16 slot) const;
     Result<f64> get_f64(u16 slot) const;
     std::string get_str(u16 slot) const;
+    Result<bool> get_bool(u16 slot) const;
+    Result<i32> get_date(u16 slot) const;
+    Result<i64> get_timestamp(u16 slot) const;
     bool is_null(u16 slot) const;
 
     std::optional<i32> min_i32() const;
@@ -75,6 +81,10 @@ class ColumnPage {
     std::optional<i64> max_i64() const;
     std::optional<f64> min_f64() const;
     std::optional<f64> max_f64() const;
+    std::optional<i32> min_date() const;
+    std::optional<i32> max_date() const;
+    std::optional<i64> min_timestamp() const;
+    std::optional<i64> max_timestamp() const;
 
     u16 null_count() const;
     bool has_nulls() const;

@@ -189,6 +189,42 @@ Result<void> ColumnFile::append_str(std::string_view s) {
     return Result<void>::ok();
 }
 
+Result<void> ColumnFile::append_bool(bool v) {
+    auto r = ensure_room_for_append();
+    if (r.is_err())
+        return r;
+    ColumnPage view(current_page_);
+    auto res = view.append_bool(v);
+    if (res.is_err())
+        return res;
+    current_dirty_ = true;
+    return Result<void>::ok();
+}
+
+Result<void> ColumnFile::append_date(i32 days) {
+    auto r = ensure_room_for_append();
+    if (r.is_err())
+        return r;
+    ColumnPage view(current_page_);
+    auto res = view.append_date(days);
+    if (res.is_err())
+        return res;
+    current_dirty_ = true;
+    return Result<void>::ok();
+}
+
+Result<void> ColumnFile::append_timestamp(i64 micros) {
+    auto r = ensure_room_for_append();
+    if (r.is_err())
+        return r;
+    ColumnPage view(current_page_);
+    auto res = view.append_timestamp(micros);
+    if (res.is_err())
+        return res;
+    current_dirty_ = true;
+    return Result<void>::ok();
+}
+
 Result<void> ColumnFile::append_bulk(const std::vector<Value>& values) {
     for (const auto& v : values) {
         auto rr = ensure_room_for_append();
@@ -208,6 +244,12 @@ Result<void> ColumnFile::append_bulk(const std::vector<Value>& values) {
             ar = view.append_f64(std::get<f64>(v));
         } else if (type_ == TypeId::VARCHAR && std::holds_alternative<std::string>(v)) {
             ar = view.append_str(std::get<std::string>(v));
+        } else if (type_ == TypeId::BOOL && std::holds_alternative<bool>(v)) {
+            ar = view.append_bool(std::get<bool>(v));
+        } else if (type_ == TypeId::DATE && std::holds_alternative<Date>(v)) {
+            ar = view.append_date(std::get<Date>(v).days);
+        } else if (type_ == TypeId::TIMESTAMP && std::holds_alternative<Timestamp>(v)) {
+            ar = view.append_timestamp(std::get<Timestamp>(v).micros);
         } else {
             return Result<void>::err("append_bulk: value type does not match column type");
         }
@@ -255,6 +297,21 @@ std::string ColumnFile::get_str(u64 row_id) {
         return {};
     ColumnPage view(*h.value());
     return view.get_str(slot);
+}
+
+Result<bool> ColumnFile::get_bool(u64 row_id) {
+    return get_typed<bool>(*this, row_id, capacity_,
+                           [](ColumnPage& v, u16 s) { return v.get_bool(s); });
+}
+
+Result<i32> ColumnFile::get_date(u64 row_id) {
+    return get_typed<i32>(*this, row_id, capacity_,
+                          [](ColumnPage& v, u16 s) { return v.get_date(s); });
+}
+
+Result<i64> ColumnFile::get_timestamp(u64 row_id) {
+    return get_typed<i64>(*this, row_id, capacity_,
+                          [](ColumnPage& v, u16 s) { return v.get_timestamp(s); });
 }
 
 bool ColumnFile::is_null(u64 row_id) {

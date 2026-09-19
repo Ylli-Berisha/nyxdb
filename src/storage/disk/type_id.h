@@ -10,6 +10,9 @@ enum class TypeId : u8 {
     INT64 = 2,
     DOUBLE = 3,
     VARCHAR = 4,
+    BOOL = 5,
+    DATE = 6,
+    TIMESTAMP = 7,
 };
 
 inline usize type_size(TypeId t, u16 max_len = 0) {
@@ -22,6 +25,12 @@ inline usize type_size(TypeId t, u16 max_len = 0) {
         return 8;
     case TypeId::VARCHAR:
         return max_len > 0 ? static_cast<usize>(max_len) + 2 : 0;
+    case TypeId::BOOL:
+        return 1;
+    case TypeId::DATE:
+        return 4;
+    case TypeId::TIMESTAMP:
+        return 8;
     default:
         return 0;
     }

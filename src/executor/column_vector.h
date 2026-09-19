@@ -3,6 +3,7 @@
 #include "common/types.h"
 #include "executor/selection_vector.h"
 #include "storage/disk/type_id.h"
+#include "storage/disk/value.h"
 
 #include <cassert>
 #include <cstring>
@@ -99,6 +100,33 @@ class ColumnVector {
         return str_data_[i];
     }
 
+    bool get_bool(size_t i) const {
+        assert(type_ == TypeId::BOOL);
+        assert(i < size_);
+        assert(!is_null(i));
+        u8 v;
+        std::memcpy(&v, data_.data() + i, 1);
+        return v != 0;
+    }
+
+    Date get_date(size_t i) const {
+        assert(type_ == TypeId::DATE);
+        assert(i < size_);
+        assert(!is_null(i));
+        i32 v;
+        std::memcpy(&v, data_.data() + i * sizeof(i32), sizeof(i32));
+        return Date{v};
+    }
+
+    Timestamp get_timestamp(size_t i) const {
+        assert(type_ == TypeId::TIMESTAMP);
+        assert(i < size_);
+        assert(!is_null(i));
+        i64 v;
+        std::memcpy(&v, data_.data() + i * sizeof(i64), sizeof(i64));
+        return Timestamp{v};
+    }
+
     bool is_null(size_t i) const {
         assert(i < size_);
         if (!nullable_)
@@ -138,6 +166,31 @@ class ColumnVector {
             null_bitmap_[i / 8] &= ~(1u << (i % 8));
     }
 
+    void set_bool(size_t i, bool v) {
+        assert(type_ == TypeId::BOOL);
+        assert(i < size_);
+        u8 byte_val = v ? 1u : 0u;
+        std::memcpy(data_.data() + i, &byte_val, 1);
+        if (nullable_)
+            null_bitmap_[i / 8] &= ~(1u << (i % 8));
+    }
+
+    void set_date(size_t i, Date d) {
+        assert(type_ == TypeId::DATE);
+        assert(i < size_);
+        std::memcpy(data_.data() + i * sizeof(i32), &d.days, sizeof(i32));
+        if (nullable_)
+            null_bitmap_[i / 8] &= ~(1u << (i % 8));
+    }
+
+    void set_timestamp(size_t i, Timestamp ts) {
+        assert(type_ == TypeId::TIMESTAMP);
+        assert(i < size_);
+        std::memcpy(data_.data() + i * sizeof(i64), &ts.micros, sizeof(i64));
+        if (nullable_)
+            null_bitmap_[i / 8] &= ~(1u << (i % 8));
+    }
+
     void set_null(size_t i) {
         assert(nullable_);
         assert(i < size_);
@@ -172,6 +225,28 @@ class ColumnVector {
         if (nullable_)
             null_bitmap_.resize((str_data_.size() + 7) / 8, 0);
         size_ = str_data_.size();
+    }
+
+    void append_bool(bool v) {
+        assert(type_ == TypeId::BOOL);
+        size_t old = size_;
+        resize(old + 1);
+        u8 byte_val = v ? 1u : 0u;
+        std::memcpy(data_.data() + old, &byte_val, 1);
+    }
+
+    void append_date(Date d) {
+        assert(type_ == TypeId::DATE);
+        size_t old = size_;
+        resize(old + 1);
+        std::memcpy(data_.data() + old * sizeof(i32), &d.days, sizeof(i32));
+    }
+
+    void append_timestamp(Timestamp ts) {
+        assert(type_ == TypeId::TIMESTAMP);
+        size_t old = size_;
+        resize(old + 1);
+        std::memcpy(data_.data() + old * sizeof(i64), &ts.micros, sizeof(i64));
     }
 
     void append_null() {
