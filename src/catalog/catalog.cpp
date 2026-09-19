@@ -346,8 +346,14 @@ Result<u64> Catalog::insert(const std::string& table_name,
             std::vector<byte> key_buf(btree.key_size());
             for (usize i = 0; i < rows.size(); ++i) {
                 std::vector<Value> key_vals(cidxs.size());
-                for (usize k = 0; k < cidxs.size(); ++k)
+                bool has_null = false;
+                for (usize k = 0; k < cidxs.size(); ++k) {
                     key_vals[k] = rows[i][cidxs[k]];
+                    if (nyx::is_null(key_vals[k]))
+                        has_null = true;
+                }
+                if (has_null)
+                    continue;
                 btree.encode_key(key_vals, key_buf.data());
                 bool found = false;
                 btree.range_scan(key_buf.data(), true, key_buf.data(), true, [&](u64) {
