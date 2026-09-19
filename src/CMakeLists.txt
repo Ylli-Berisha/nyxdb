@@ -6,6 +6,8 @@ add_library(nyxdb_core STATIC
     storage/disk/column_file.cpp
     storage/disk/schema.cpp
     storage/disk/table.cpp
+    storage/disk/index_file.cpp
+    storage/disk/btree_index.cpp
     storage/memory/lru_k_replacer.cpp
     storage/memory/buffer_pool.cpp
     executor/table_scan.cpp
