@@ -37,6 +37,7 @@ IndexFile::PageHandle& IndexFile::PageHandle::operator=(PageHandle&& o) noexcept
 IndexFile::IndexFile(std::unique_ptr<DiskManager> disk,
                      std::unique_ptr<BufferPool>  pool,
                      std::vector<IndexColSpec>    cols,
+                     std::vector<u8>              col_indices,
                      bool   is_unique,
                      PageId root_page_id,
                      u64    entry_count,
@@ -45,6 +46,7 @@ IndexFile::IndexFile(std::unique_ptr<DiskManager> disk,
                      u16    capacity,
                      Page   meta_page)
     : disk_(std::move(disk)), pool_(std::move(pool)), cols_(std::move(cols)),
+      col_indices_(std::move(col_indices)),
       is_unique_(is_unique), root_page_id_(root_page_id), entry_count_(entry_count),
       dirty_(dirty), key_size_(key_size), capacity_(capacity),
       meta_page_(std::move(meta_page)) {}
@@ -58,9 +60,12 @@ static usize compute_key_size(const std::vector<IndexColSpec>& cols) {
 
 Result<IndexFile> IndexFile::create(const std::string& path,
                                     std::vector<IndexColSpec> cols,
+                                    std::vector<u8> col_indices,
                                     bool is_unique) {
     if (cols.empty())
         return Result<IndexFile>::err("IndexFile::create: no columns");
+    if (col_indices.size() != cols.size())
+        return Result<IndexFile>::err("IndexFile::create: col_indices size mismatch");
 
     usize key_size = compute_key_size(cols);
     if (key_size == 0)
@@ -89,9 +94,13 @@ Result<IndexFile> IndexFile::create(const std::string& path,
         m->root_page_id = 0;
         m->entry_count  = 0;
 
-        auto* spec_ptr = reinterpret_cast<IndexColSpec*>(meta.payload() + sizeof(IndexFileMeta));
+        byte* after_meta = meta.payload() + sizeof(IndexFileMeta);
+        auto* spec_ptr = reinterpret_cast<IndexColSpec*>(after_meta);
         for (usize i = 0; i < cols.size(); ++i)
             spec_ptr[i] = cols[i];
+
+        byte* idx_ptr = after_meta + cols.size() * sizeof(IndexColSpec);
+        std::memcpy(idx_ptr, col_indices.data(), col_indices.size());
 
         auto wr = disk->write_page(meta);
         if (wr.is_err())
@@ -100,7 +109,8 @@ Result<IndexFile> IndexFile::create(const std::string& path,
         auto pool = std::make_unique<BufferPool>(INDEX_POOL_CAPACITY, *disk);
 
         return Result<IndexFile>::ok(IndexFile(std::move(disk), std::move(pool),
-                                               std::move(cols), is_unique,
+                                               std::move(cols), std::move(col_indices),
+                                               is_unique,
                                                0, 0, false,
                                                key_size, capacity,
                                                std::move(meta)));
@@ -130,11 +140,15 @@ Result<IndexFile> IndexFile::open(const std::string& path) {
         PageId root_page  = m->root_page_id;
         u64    entry_count = m->entry_count;
 
+        const byte* after_meta = meta.payload() + sizeof(IndexFileMeta);
+        const auto* spec_ptr = reinterpret_cast<const IndexColSpec*>(after_meta);
         std::vector<IndexColSpec> cols(col_count);
-        const auto* spec_ptr =
-            reinterpret_cast<const IndexColSpec*>(meta.payload() + sizeof(IndexFileMeta));
         for (u8 i = 0; i < col_count; ++i)
             cols[i] = spec_ptr[i];
+
+        const byte* idx_ptr = after_meta + col_count * sizeof(IndexColSpec);
+        std::vector<u8> col_indices(col_count);
+        std::memcpy(col_indices.data(), idx_ptr, col_count);
 
         usize key_size = compute_key_size(cols);
         u16   capacity = index_node_capacity(key_size);
@@ -142,7 +156,8 @@ Result<IndexFile> IndexFile::open(const std::string& path) {
         auto pool = std::make_unique<BufferPool>(INDEX_POOL_CAPACITY, *disk);
 
         return Result<IndexFile>::ok(IndexFile(std::move(disk), std::move(pool),
-                                               std::move(cols), is_unique,
+                                               std::move(cols), std::move(col_indices),
+                                               is_unique,
                                                root_page, entry_count, dirty,
                                                key_size, capacity,
                                                std::move(meta)));

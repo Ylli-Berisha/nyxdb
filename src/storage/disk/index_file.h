@@ -37,6 +37,7 @@ class IndexFile {
 
     static Result<IndexFile> create(const std::string& path,
                                     std::vector<IndexColSpec> cols,
+                                    std::vector<u8> col_indices,
                                     bool is_unique);
     static Result<IndexFile> open(const std::string& path);
 
@@ -52,6 +53,7 @@ class IndexFile {
     Result<void>       write_page(const Page& page);
 
     const std::vector<IndexColSpec>& col_specs()     const { return cols_; }
+    const std::vector<u8>&          col_indices()   const { return col_indices_; }
     usize  key_size()      const { return key_size_; }
     u16    node_capacity() const { return capacity_; }
     bool   is_unique()     const { return is_unique_; }
@@ -72,6 +74,7 @@ class IndexFile {
     IndexFile(std::unique_ptr<DiskManager> disk,
               std::unique_ptr<BufferPool>  pool,
               std::vector<IndexColSpec>    cols,
+              std::vector<u8>              col_indices,
               bool   is_unique,
               PageId root_page_id,
               u64    entry_count,
@@ -85,6 +88,7 @@ class IndexFile {
     std::unique_ptr<DiskManager> disk_;
     std::unique_ptr<BufferPool>  pool_;
     std::vector<IndexColSpec>    cols_;
+    std::vector<u8>              col_indices_;
     bool   is_unique_    = false;
     PageId root_page_id_ = 0;
     u64    entry_count_  = 0;
