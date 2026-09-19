@@ -2,6 +2,7 @@
 
 #include "common/result.h"
 #include "storage/disk/btree_index.h"
+#include "storage/disk/constraint_file.h"
 #include "storage/disk/schema.h"
 #include "storage/disk/table.h"
 #include "storage/disk/value.h"
@@ -35,7 +36,8 @@ class Catalog {
     const std::string& data_root() const { return data_root_; }
     usize size() const { return tables_.size(); }
 
-    Result<void> add_table(const std::string& name, Schema schema);
+    Result<void> add_table(const std::string& name, Schema schema,
+                           std::vector<ConstraintMeta> constraints = {});
     Result<u64> insert(const std::string& table_name, const std::vector<std::vector<Value>>& rows);
     Result<void> drop_table(const std::string& name, bool if_exists = false);
     Result<u64> delete_rows(const std::string& name, const std::vector<u64>& row_indices);
@@ -44,6 +46,7 @@ class Catalog {
                             const Schema& schema, const std::vector<std::vector<Value>>& new_rows);
     Result<void> flush_all();
 
+    const std::vector<ConstraintMeta>& constraints_of(const std::string& table_name) const;
     const std::vector<IndexMeta>& indexes_of(const std::string& table_name) const;
     BTreeIndex* btree_index(const std::string& table_name, const std::string& index_name);
     Result<void> add_index(const std::string& table_name, const std::string& index_name,
@@ -61,6 +64,7 @@ class Catalog {
     std::string data_root_;
     std::unordered_map<std::string, Table> tables_;
     std::optional<WalWriter> wal_;
+    std::unordered_map<std::string, std::vector<ConstraintMeta>> constraint_meta_;
     std::unordered_map<std::string, std::vector<IndexMeta>> index_meta_;
     std::unordered_map<std::string, std::vector<BTreeIndex>> indexes_;
 };
