@@ -167,8 +167,25 @@ struct BoundUpdate {
     BoundExprPtr where;
 };
 
+struct BoundCreateIndex {
+    std::string     table_name;
+    std::string     index_name;
+    std::vector<u8> col_indices;
+    bool            unique = false;
+};
+
+struct BoundDropIndex {
+    std::string table_name;
+    std::string index_name;
+};
+
+struct BoundShowIndexes {
+    std::string table_name;
+};
+
 using BoundStatement = std::variant<BoundSelect, BoundCreateTable, BoundInsert, BoundDropTable,
-                                    BoundDelete, BoundUpdate>;
+                                    BoundDelete, BoundUpdate,
+                                    BoundCreateIndex, BoundDropIndex, BoundShowIndexes>;
 
 TypeId bound_expr_type(const BoundExpr& e);
 bool bound_expr_nullable(const BoundExpr& e);

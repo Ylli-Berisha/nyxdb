@@ -424,9 +424,24 @@ Result<bound::BoundStatement> Binder::bind(const ast::Statement& stmt, std::stri
                 if (r.is_err())
                     return Result<bound::BoundStatement>::err(r.error());
                 return Result<bound::BoundStatement>::ok(std::move(r.value()));
-            } else {
-                static_assert(std::is_same_v<T, ast::UpdateStmt>);
+            } else if constexpr (std::is_same_v<T, ast::UpdateStmt>) {
                 auto r = bind_update(s, source);
+                if (r.is_err())
+                    return Result<bound::BoundStatement>::err(r.error());
+                return Result<bound::BoundStatement>::ok(std::move(r.value()));
+            } else if constexpr (std::is_same_v<T, ast::CreateIndexStmt>) {
+                auto r = bind_create_index(s, source);
+                if (r.is_err())
+                    return Result<bound::BoundStatement>::err(r.error());
+                return Result<bound::BoundStatement>::ok(std::move(r.value()));
+            } else if constexpr (std::is_same_v<T, ast::DropIndexStmt>) {
+                auto r = bind_drop_index(s, source);
+                if (r.is_err())
+                    return Result<bound::BoundStatement>::err(r.error());
+                return Result<bound::BoundStatement>::ok(std::move(r.value()));
+            } else {
+                static_assert(std::is_same_v<T, ast::ShowIndexesStmt>);
+                auto r = bind_show_indexes(s, source);
                 if (r.is_err())
                     return Result<bound::BoundStatement>::err(r.error());
                 return Result<bound::BoundStatement>::ok(std::move(r.value()));
@@ -831,6 +846,76 @@ Result<bound::BoundExprPtr> Binder::bind_null_check_(const ast::NullCheck& nc) {
         return cr;
     return Result<bound::BoundExprPtr>::ok(
         bound::make_bound(bound::BoundNullCheck{nc.kind, std::move(cr.value())}));
+}
+
+Result<bound::BoundCreateIndex> Binder::bind_create_index(const ast::CreateIndexStmt& stmt,
+                                                          std::string_view source) {
+    source_ = source;
+    const Schema* sch = catalog_.schema_of(stmt.table_name);
+    if (!sch)
+        return Result<bound::BoundCreateIndex>::err(
+            err_msg_("unknown table: " + stmt.table_name, SourceLoc{0, 0}));
+
+    for (const auto& m : catalog_.indexes_of(stmt.table_name)) {
+        if (m.name == stmt.index_name)
+            return Result<bound::BoundCreateIndex>::err(
+                err_msg_("index '" + stmt.index_name + "' already exists on table '" +
+                         stmt.table_name + "'", SourceLoc{0, 0}));
+    }
+
+    std::vector<u8> col_indices;
+    col_indices.reserve(stmt.column_names.size());
+    for (const auto& col_name : stmt.column_names) {
+        bool found = false;
+        for (usize i = 0; i < sch->size(); ++i) {
+            if ((*sch)[i].name == col_name) {
+                if ((*sch)[i].type == TypeId::BOOL)
+                    return Result<bound::BoundCreateIndex>::err(
+                        err_msg_("cannot index BOOL column '" + col_name + "'", SourceLoc{0, 0}));
+                col_indices.push_back(static_cast<u8>(i));
+                found = true;
+                break;
+            }
+        }
+        if (!found)
+            return Result<bound::BoundCreateIndex>::err(
+                err_msg_("column '" + col_name + "' not found in table '" +
+                         stmt.table_name + "'", SourceLoc{0, 0}));
+    }
+
+    return Result<bound::BoundCreateIndex>::ok(
+        {stmt.table_name, stmt.index_name, std::move(col_indices), stmt.unique});
+}
+
+Result<bound::BoundDropIndex> Binder::bind_drop_index(const ast::DropIndexStmt& stmt,
+                                                       std::string_view source) {
+    source_ = source;
+    if (!catalog_.has_table(stmt.table_name))
+        return Result<bound::BoundDropIndex>::err(
+            err_msg_("unknown table: " + stmt.table_name, SourceLoc{0, 0}));
+
+    bool found = false;
+    for (const auto& m : catalog_.indexes_of(stmt.table_name)) {
+        if (m.name == stmt.index_name) {
+            found = true;
+            break;
+        }
+    }
+    if (!found)
+        return Result<bound::BoundDropIndex>::err(
+            err_msg_("index '" + stmt.index_name + "' not found on table '" +
+                     stmt.table_name + "'", SourceLoc{0, 0}));
+
+    return Result<bound::BoundDropIndex>::ok({stmt.table_name, stmt.index_name});
+}
+
+Result<bound::BoundShowIndexes> Binder::bind_show_indexes(const ast::ShowIndexesStmt& stmt,
+                                                           std::string_view source) {
+    source_ = source;
+    if (!catalog_.has_table(stmt.table_name))
+        return Result<bound::BoundShowIndexes>::err(
+            err_msg_("unknown table: " + stmt.table_name, SourceLoc{0, 0}));
+    return Result<bound::BoundShowIndexes>::ok({stmt.table_name});
 }
 
 } // namespace nyx

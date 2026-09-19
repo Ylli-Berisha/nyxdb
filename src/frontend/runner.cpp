@@ -194,4 +194,12 @@ Result<u64> run_update(Catalog& catalog, const bound::BoundUpdate& stmt) {
     return catalog.update_rows(stmt.table_name, old_indices, stmt.schema, new_rows);
 }
 
+Result<void> run_create_index(Catalog& catalog, const bound::BoundCreateIndex& stmt) {
+    return catalog.add_index(stmt.table_name, stmt.index_name, stmt.col_indices, stmt.unique);
+}
+
+Result<void> run_drop_index(Catalog& catalog, const bound::BoundDropIndex& stmt) {
+    return catalog.drop_index(stmt.table_name, stmt.index_name);
+}
+
 } // namespace nyx::frontend
