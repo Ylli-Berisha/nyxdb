@@ -8,7 +8,7 @@
 namespace nyx {
 namespace SchemaFile {
 
-static constexpr u8 MAGIC[4] = {'N', 'Y', 'X', '2'};
+static constexpr u8 MAGIC[4] = {'N', 'Y', 'X', '3'};
 static constexpr u8 FLAG_NULLABLE = 0x01;
 
 static void put_u16(u8* dst, u16 v) {
@@ -32,6 +32,129 @@ static u32 read_u32(const u8* src) {
            (static_cast<u32>(src[2]) << 16) | (static_cast<u32>(src[3]) << 24);
 }
 
+static void append_default(std::vector<u8>& buf, const Value& v) {
+    buf.push_back(static_cast<u8>(std::visit(
+        [](const auto& x) -> TypeId {
+            using T = std::decay_t<decltype(x)>;
+            if constexpr (std::is_same_v<T, i32>)
+                return TypeId::INT32;
+            else if constexpr (std::is_same_v<T, i64>)
+                return TypeId::INT64;
+            else if constexpr (std::is_same_v<T, f64>)
+                return TypeId::DOUBLE;
+            else if constexpr (std::is_same_v<T, std::string>)
+                return TypeId::VARCHAR;
+            else if constexpr (std::is_same_v<T, bool>)
+                return TypeId::BOOL;
+            else if constexpr (std::is_same_v<T, Date>)
+                return TypeId::DATE;
+            else if constexpr (std::is_same_v<T, Timestamp>)
+                return TypeId::TIMESTAMP;
+            else
+                return TypeId::INT32;
+        },
+        v)));
+
+    std::visit(
+        [&](const auto& x) {
+            using T = std::decay_t<decltype(x)>;
+            u8 tmp[8];
+            if constexpr (std::is_same_v<T, i32>) {
+                std::memcpy(tmp, &x, 4);
+                buf.insert(buf.end(), tmp, tmp + 4);
+            } else if constexpr (std::is_same_v<T, i64>) {
+                std::memcpy(tmp, &x, 8);
+                buf.insert(buf.end(), tmp, tmp + 8);
+            } else if constexpr (std::is_same_v<T, f64>) {
+                std::memcpy(tmp, &x, 8);
+                buf.insert(buf.end(), tmp, tmp + 8);
+            } else if constexpr (std::is_same_v<T, std::string>) {
+                u16 len = static_cast<u16>(x.size());
+                put_u16(tmp, len);
+                buf.insert(buf.end(), tmp, tmp + 2);
+                buf.insert(buf.end(), x.begin(), x.end());
+            } else if constexpr (std::is_same_v<T, bool>) {
+                buf.push_back(x ? 1u : 0u);
+            } else if constexpr (std::is_same_v<T, Date>) {
+                std::memcpy(tmp, &x.days, 4);
+                buf.insert(buf.end(), tmp, tmp + 4);
+            } else if constexpr (std::is_same_v<T, Timestamp>) {
+                std::memcpy(tmp, &x.micros, 8);
+                buf.insert(buf.end(), tmp, tmp + 8);
+            }
+        },
+        v);
+}
+
+static bool read_default(int fd, Value& out) {
+    u8 type_byte;
+    if (::read(fd, &type_byte, 1) != 1)
+        return false;
+    TypeId t = static_cast<TypeId>(type_byte);
+    u8 tmp[8];
+    switch (t) {
+    case TypeId::INT32: {
+        if (::read(fd, tmp, 4) != 4)
+            return false;
+        i32 v;
+        std::memcpy(&v, tmp, 4);
+        out = v;
+        return true;
+    }
+    case TypeId::INT64: {
+        if (::read(fd, tmp, 8) != 8)
+            return false;
+        i64 v;
+        std::memcpy(&v, tmp, 8);
+        out = v;
+        return true;
+    }
+    case TypeId::DOUBLE: {
+        if (::read(fd, tmp, 8) != 8)
+            return false;
+        f64 v;
+        std::memcpy(&v, tmp, 8);
+        out = v;
+        return true;
+    }
+    case TypeId::VARCHAR: {
+        if (::read(fd, tmp, 2) != 2)
+            return false;
+        u16 len = read_u16(tmp);
+        std::string s(len, '\0');
+        if (::read(fd, s.data(), len) != static_cast<ssize_t>(len))
+            return false;
+        out = std::move(s);
+        return true;
+    }
+    case TypeId::BOOL: {
+        u8 b;
+        if (::read(fd, &b, 1) != 1)
+            return false;
+        out = (b != 0);
+        return true;
+    }
+    case TypeId::DATE: {
+        if (::read(fd, tmp, 4) != 4)
+            return false;
+        i32 v;
+        std::memcpy(&v, tmp, 4);
+        out = Date{v};
+        return true;
+    }
+    case TypeId::TIMESTAMP: {
+        if (::read(fd, tmp, 8) != 8)
+            return false;
+        i64 v;
+        std::memcpy(&v, tmp, 8);
+        out = Timestamp{v};
+        return true;
+    }
+    default:
+        return false;
+    }
+}
+
 Result<void> write(const std::string& path, const Schema& schema) {
     std::vector<u8> buf;
     buf.insert(buf.end(), MAGIC, MAGIC + 4);
@@ -49,6 +172,13 @@ Result<void> write(const std::string& path, const Schema& schema) {
         put_u16(name_len, static_cast<u16>(col.name.size()));
         buf.insert(buf.end(), name_len, name_len + 2);
         buf.insert(buf.end(), col.name.begin(), col.name.end());
+
+        if (col.default_value.has_value()) {
+            buf.push_back(1u);
+            append_default(buf, *col.default_value);
+        } else {
+            buf.push_back(0u);
+        }
     }
 
     int fd = ::open(path.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
@@ -108,7 +238,23 @@ Result<Schema> read(const std::string& path) {
             return Result<Schema>::err("schema read: short read on column name");
         }
 
-        schema.push_back({std::move(name), type, nullable, max_len});
+        u8 has_default;
+        if (::read(fd, &has_default, 1) != 1) {
+            ::close(fd);
+            return Result<Schema>::err("schema read: short read on has_default");
+        }
+
+        std::optional<Value> def;
+        if (has_default) {
+            Value v;
+            if (!read_default(fd, v)) {
+                ::close(fd);
+                return Result<Schema>::err("schema read: short read on default value");
+            }
+            def = std::move(v);
+        }
+
+        schema.push_back({std::move(name), type, nullable, max_len, std::move(def)});
     }
 
     ::close(fd);

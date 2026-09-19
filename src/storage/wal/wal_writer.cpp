@@ -167,6 +167,63 @@ Result<void> WalWriter::log_create_table(const std::string& table, const Schema&
         wal_put_u16(tmp, static_cast<u16>(col.name.size()));
         buf.insert(buf.end(), tmp, tmp + 2);
         buf.insert(buf.end(), col.name.begin(), col.name.end());
+
+        if (col.default_value.has_value()) {
+            buf.push_back(1u);
+            const Value& dv = *col.default_value;
+            buf.push_back(static_cast<u8>(std::visit(
+                [](const auto& x) -> TypeId {
+                    using T = std::decay_t<decltype(x)>;
+                    if constexpr (std::is_same_v<T, i32>)
+                        return TypeId::INT32;
+                    else if constexpr (std::is_same_v<T, i64>)
+                        return TypeId::INT64;
+                    else if constexpr (std::is_same_v<T, f64>)
+                        return TypeId::DOUBLE;
+                    else if constexpr (std::is_same_v<T, std::string>)
+                        return TypeId::VARCHAR;
+                    else if constexpr (std::is_same_v<T, bool>)
+                        return TypeId::BOOL;
+                    else if constexpr (std::is_same_v<T, Date>)
+                        return TypeId::DATE;
+                    else if constexpr (std::is_same_v<T, Timestamp>)
+                        return TypeId::TIMESTAMP;
+                    else
+                        return TypeId::INT32;
+                },
+                dv)));
+            std::visit(
+                [&](const auto& x) {
+                    using T = std::decay_t<decltype(x)>;
+                    if constexpr (std::is_same_v<T, i32>) {
+                        wal_put_u32(tmp, static_cast<u32>(x));
+                        buf.insert(buf.end(), tmp, tmp + 4);
+                    } else if constexpr (std::is_same_v<T, i64>) {
+                        wal_put_u64(tmp, static_cast<u64>(x));
+                        buf.insert(buf.end(), tmp, tmp + 8);
+                    } else if constexpr (std::is_same_v<T, f64>) {
+                        u64 bits;
+                        std::memcpy(&bits, &x, 8);
+                        wal_put_u64(tmp, bits);
+                        buf.insert(buf.end(), tmp, tmp + 8);
+                    } else if constexpr (std::is_same_v<T, std::string>) {
+                        wal_put_u16(tmp, static_cast<u16>(x.size()));
+                        buf.insert(buf.end(), tmp, tmp + 2);
+                        buf.insert(buf.end(), x.begin(), x.end());
+                    } else if constexpr (std::is_same_v<T, bool>) {
+                        buf.push_back(x ? 1u : 0u);
+                    } else if constexpr (std::is_same_v<T, Date>) {
+                        wal_put_u32(tmp, static_cast<u32>(x.days));
+                        buf.insert(buf.end(), tmp, tmp + 4);
+                    } else if constexpr (std::is_same_v<T, Timestamp>) {
+                        wal_put_u64(tmp, static_cast<u64>(x.micros));
+                        buf.insert(buf.end(), tmp, tmp + 8);
+                    }
+                },
+                dv);
+        } else {
+            buf.push_back(0u);
+        }
     }
 
     return write_record(buf);
