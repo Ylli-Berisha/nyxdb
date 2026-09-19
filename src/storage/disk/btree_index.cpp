@@ -486,9 +486,20 @@ Result<void> BTreeIndex::insert(const std::vector<Value>& key_vals, u64 row_id) 
         insert_slot = find_leaf_insert_slot(lh.get()->payload(), count, key.data());
 
         if (file_.is_unique() && insert_slot > 0) {
-            const byte* prev = leaf_key_at(lh.get()->payload(), insert_slot - 1);
-            if (compare_keys(prev, key.data()) == 0)
-                return Result<void>::err("unique constraint violated: duplicate key");
+            bool has_null = false;
+            usize off = 0;
+            for (const auto& spec : file_.col_specs()) {
+                if (key.data()[off] == 0x00u) {
+                    has_null = true;
+                    break;
+                }
+                off += 1u + type_size(spec.type, spec.max_len);
+            }
+            if (!has_null) {
+                const byte* prev = leaf_key_at(lh.get()->payload(), insert_slot - 1);
+                if (compare_keys(prev, key.data()) == 0)
+                    return Result<void>::err("unique constraint violated: duplicate key");
+            }
         }
 
         need_split = (count >= hdr->capacity);
