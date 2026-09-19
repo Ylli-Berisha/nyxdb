@@ -4,9 +4,11 @@
 #include "catalog/catalog.h"
 #include "common/result.h"
 #include "executor/expression.h"
+#include "executor/index_scan.h"
 #include "executor/operator.h"
 
 #include <memory>
+#include <optional>
 #include <unordered_map>
 #include <vector>
 
@@ -32,7 +34,17 @@ class Planner {
     lower_expr_(const bound::BoundExpr& e, const ColCtx& ctx,
                 const std::vector<bound::BoundProjection>* projs = nullptr);
 
-    Result<std::unique_ptr<Operator>> build_scans_(const bound::BoundSelect& stmt, ColCtx& ctx);
+    struct IndexScanChoice {
+        BTreeIndex*                     index;
+        std::optional<IndexScan::Bound> lo;
+        std::optional<IndexScan::Bound> hi;
+    };
+
+    std::optional<IndexScanChoice> try_index_scan_(const bound::BoundBinding& binding,
+                                                   const bound::BoundExpr& where);
+
+    Result<std::unique_ptr<Operator>> build_scans_(const bound::BoundSelect& stmt, ColCtx& ctx,
+                                                    bool& where_consumed);
     Result<std::unique_ptr<Operator>> build_aggregate_(std::unique_ptr<Operator> child,
                                                        const bound::BoundSelect& stmt, ColCtx& ctx);
     Result<std::unique_ptr<Operator>> build_join_(std::unique_ptr<Operator> left,
