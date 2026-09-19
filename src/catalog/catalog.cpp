@@ -62,16 +62,25 @@ static Result<void> write_lsn(const std::string& table_dir, LsnCheckpoint cp) {
 }
 
 static Value read_col_value(ColumnFile& cf, u64 row_id) {
-    if (cf.is_null(row_id)) return std::monostate{};
+    if (cf.is_null(row_id))
+        return std::monostate{};
     switch (cf.type()) {
-        case TypeId::INT32:     return cf.get_i32(row_id).value();
-        case TypeId::INT64:     return cf.get_i64(row_id).value();
-        case TypeId::DOUBLE:    return cf.get_f64(row_id).value();
-        case TypeId::VARCHAR:   return cf.get_str(row_id);
-        case TypeId::DATE:      return Date{cf.get_date(row_id).value()};
-        case TypeId::TIMESTAMP: return Timestamp{cf.get_timestamp(row_id).value()};
-        case TypeId::BOOL:      return cf.get_bool(row_id).value();
-        default:                return std::monostate{};
+    case TypeId::INT32:
+        return cf.get_i32(row_id).value();
+    case TypeId::INT64:
+        return cf.get_i64(row_id).value();
+    case TypeId::DOUBLE:
+        return cf.get_f64(row_id).value();
+    case TypeId::VARCHAR:
+        return cf.get_str(row_id);
+    case TypeId::DATE:
+        return Date{cf.get_date(row_id).value()};
+    case TypeId::TIMESTAMP:
+        return Timestamp{cf.get_timestamp(row_id).value()};
+    case TypeId::BOOL:
+        return cf.get_bool(row_id).value();
+    default:
+        return std::monostate{};
     }
 }
 
@@ -130,27 +139,29 @@ Result<Catalog> Catalog::load(const std::string& data_root) {
 
     for (auto& [tbl_name, tbl] : cat.tables_) {
         for (const auto& entry : fs::directory_iterator(tbl.dir(), ec)) {
-            if (!entry.is_regular_file()) continue;
-            if (entry.path().extension() != ".idx") continue;
+            if (!entry.is_regular_file())
+                continue;
+            if (entry.path().extension() != ".idx")
+                continue;
 
             std::string idx_name = entry.path().stem().string();
             auto bi_r = BTreeIndex::open(entry.path().string());
             if (bi_r.is_err())
-                return Result<Catalog>::err("catalog: open index '" + idx_name + "': " +
-                                            bi_r.error().message);
+                return Result<Catalog>::err("catalog: open index '" + idx_name +
+                                            "': " + bi_r.error().message);
             BTreeIndex bi = std::move(bi_r.value());
 
             if (bi.is_dirty()) {
                 auto r = cat.rebuild_index_(bi, tbl);
                 if (r.is_err())
-                    return Result<Catalog>::err("catalog: rebuild index '" + idx_name + "': " +
-                                                r.error().message);
+                    return Result<Catalog>::err("catalog: rebuild index '" + idx_name +
+                                                "': " + r.error().message);
             }
 
             IndexMeta meta;
-            meta.name        = idx_name;
+            meta.name = idx_name;
             meta.col_indices = std::vector<u8>(bi.col_indices().begin(), bi.col_indices().end());
-            meta.unique      = bi.is_unique();
+            meta.unique = bi.is_unique();
 
             cat.index_meta_[tbl_name].push_back(std::move(meta));
             cat.indexes_[tbl_name].push_back(std::move(bi));
@@ -286,7 +297,8 @@ Result<u64> Catalog::insert(const std::string& table_name,
     auto idx_it = indexes_.find(canonical);
     if (idx_it != indexes_.end()) {
         for (auto& btree : idx_it->second) {
-            if (!btree.is_unique()) continue;
+            if (!btree.is_unique())
+                continue;
             const auto& cidxs = btree.col_indices();
             std::vector<byte> key_buf(btree.key_size());
             for (usize i = 0; i < rows.size(); ++i) {
@@ -295,8 +307,10 @@ Result<u64> Catalog::insert(const std::string& table_name,
                     key_vals[k] = rows[i][cidxs[k]];
                 btree.encode_key(key_vals, key_buf.data());
                 bool found = false;
-                btree.range_scan(key_buf.data(), true, key_buf.data(), true,
-                                 [&](u64) { found = true; return false; });
+                btree.range_scan(key_buf.data(), true, key_buf.data(), true, [&](u64) {
+                    found = true;
+                    return false;
+                });
                 if (found)
                     return Result<u64>::err("unique constraint violation");
             }
@@ -446,8 +460,8 @@ Result<void> Catalog::flush_all() {
             if (btree.is_dirty()) {
                 auto r = btree.flush();
                 if (r.is_err())
-                    return Result<void>::err("flush_all: index on '" + tbl_name + "': " +
-                                             r.error().message);
+                    return Result<void>::err("flush_all: index on '" + tbl_name +
+                                             "': " + r.error().message);
             }
         }
     }
@@ -495,14 +509,14 @@ BTreeIndex* Catalog::btree_index(const std::string& table_name, const std::strin
 Result<void> Catalog::bulk_build_index_(BTreeIndex& idx, Table& tbl) {
     u64 n = tbl.row_count();
     const auto& deleted = tbl.deleted_bitmap();
-    const auto& cidxs   = idx.col_indices();
+    const auto& cidxs = idx.col_indices();
 
     std::vector<std::pair<std::vector<byte>, u64>> entries;
     std::vector<byte> key_buf(idx.key_size());
 
     for (u64 row_id = 0; row_id < n; ++row_id) {
         usize byte_idx = row_id / 8;
-        u8    bit      = static_cast<u8>(1u << (row_id % 8));
+        u8 bit = static_cast<u8>(1u << (row_id % 8));
         if (byte_idx < deleted.size() && (deleted[byte_idx] & bit))
             continue;
 
@@ -533,7 +547,7 @@ Result<void> Catalog::rebuild_index_(BTreeIndex& idx, Table& tbl) {
 }
 
 Result<void> Catalog::add_index(const std::string& table_name, const std::string& index_name,
-                                 const std::vector<u8>& col_indices, bool unique) {
+                                const std::vector<u8>& col_indices, bool unique) {
     std::string canonical = canonicalize(table_name);
     auto it = tables_.find(canonical);
     if (it == tables_.end())
@@ -559,8 +573,8 @@ Result<void> Catalog::add_index(const std::string& table_name, const std::string
     }
 
     std::string idx_path = tbl.dir() + "/" + index_name + ".idx";
-    auto bi_r = BTreeIndex::create(idx_path, std::move(specs),
-                                    std::vector<u8>(col_indices), unique);
+    auto bi_r =
+        BTreeIndex::create(idx_path, std::move(specs), std::vector<u8>(col_indices), unique);
     if (bi_r.is_err())
         return Result<void>::err("add_index: " + bi_r.error().message);
     BTreeIndex bi = std::move(bi_r.value());
@@ -574,9 +588,9 @@ Result<void> Catalog::add_index(const std::string& table_name, const std::string
         return rf;
 
     IndexMeta meta;
-    meta.name        = index_name;
+    meta.name = index_name;
     meta.col_indices = std::vector<u8>(col_indices.begin(), col_indices.end());
-    meta.unique      = unique;
+    meta.unique = unique;
 
     index_meta_[canonical].push_back(std::move(meta));
     indexes_[canonical].push_back(std::move(bi));
@@ -590,7 +604,7 @@ Result<void> Catalog::drop_index(const std::string& table_name, const std::strin
     if (mit == index_meta_.end())
         return Result<void>::err("drop_index: no indexes on table '" + table_name + "'");
 
-    auto& metas  = mit->second;
+    auto& metas = mit->second;
     auto& btrees = indexes_[canonical];
 
     for (usize i = 0; i < metas.size(); ++i) {
@@ -609,8 +623,8 @@ Result<void> Catalog::drop_index(const std::string& table_name, const std::strin
         }
     }
 
-    return Result<void>::err("drop_index: index '" + index_name +
-                             "' not found on table '" + table_name + "'");
+    return Result<void>::err("drop_index: index '" + index_name + "' not found on table '" +
+                             table_name + "'");
 }
 
 } // namespace nyx

@@ -15,9 +15,9 @@
 namespace nyx {
 
 struct IndexMeta {
-    std::string     name;
+    std::string name;
     std::vector<u8> col_indices;
-    bool            unique = false;
+    bool unique = false;
 };
 
 class Catalog {
@@ -61,7 +61,7 @@ class Catalog {
     std::string data_root_;
     std::unordered_map<std::string, Table> tables_;
     std::optional<WalWriter> wal_;
-    std::unordered_map<std::string, std::vector<IndexMeta>>  index_meta_;
+    std::unordered_map<std::string, std::vector<IndexMeta>> index_meta_;
     std::unordered_map<std::string, std::vector<BTreeIndex>> indexes_;
 };
 

@@ -79,58 +79,63 @@ static std::pair<Table*, std::unique_ptr<TableScan>> make_scan(Catalog& cat,
 }
 
 static std::optional<Value> extract_literal_(const bound::BoundExpr& e) {
-    return std::visit([](const auto& n) -> std::optional<Value> {
-        using T = std::decay_t<decltype(n)>;
-        if constexpr (std::is_same_v<T, bound::BoundIntLit>) {
-            if (n.type == TypeId::INT32) return Value{i32(n.value)};
-            return Value{i64(n.value)};
-        } else if constexpr (std::is_same_v<T, bound::BoundDoubleLit>) {
-            return Value{n.value};
-        } else if constexpr (std::is_same_v<T, bound::BoundStringLit>) {
-            return Value{n.value};
-        } else if constexpr (std::is_same_v<T, bound::BoundBoolLit>) {
-            return Value{n.value};
-        } else if constexpr (std::is_same_v<T, bound::BoundDateLit>) {
-            return Value{Date{n.days}};
-        } else if constexpr (std::is_same_v<T, bound::BoundTimestampLit>) {
-            return Value{Timestamp{n.micros}};
-        } else {
-            return std::nullopt;
-        }
-    }, e.node);
+    return std::visit(
+        [](const auto& n) -> std::optional<Value> {
+            using T = std::decay_t<decltype(n)>;
+            if constexpr (std::is_same_v<T, bound::BoundIntLit>) {
+                if (n.type == TypeId::INT32)
+                    return Value{i32(n.value)};
+                return Value{i64(n.value)};
+            } else if constexpr (std::is_same_v<T, bound::BoundDoubleLit>) {
+                return Value{n.value};
+            } else if constexpr (std::is_same_v<T, bound::BoundStringLit>) {
+                return Value{n.value};
+            } else if constexpr (std::is_same_v<T, bound::BoundBoolLit>) {
+                return Value{n.value};
+            } else if constexpr (std::is_same_v<T, bound::BoundDateLit>) {
+                return Value{Date{n.days}};
+            } else if constexpr (std::is_same_v<T, bound::BoundTimestampLit>) {
+                return Value{Timestamp{n.micros}};
+            } else {
+                return std::nullopt;
+            }
+        },
+        e.node);
 }
 
-std::optional<Planner::IndexScanChoice> Planner::try_index_scan_(
-    const bound::BoundBinding& binding, const bound::BoundExpr& where) {
+std::optional<Planner::IndexScanChoice> Planner::try_index_scan_(const bound::BoundBinding& binding,
+                                                                 const bound::BoundExpr& where) {
 
     const auto* bop = std::get_if<bound::BoundBinaryOp>(&where.node);
-    if (!bop) return std::nullopt;
+    if (!bop)
+        return std::nullopt;
 
-    bool is_range_op = (bop->op == BinaryOpKind::EQ ||
-                        bop->op == BinaryOpKind::LT  ||
-                        bop->op == BinaryOpKind::LE  ||
-                        bop->op == BinaryOpKind::GT  ||
-                        bop->op == BinaryOpKind::GE);
-    if (!is_range_op) return std::nullopt;
+    bool is_range_op =
+        (bop->op == BinaryOpKind::EQ || bop->op == BinaryOpKind::LT ||
+         bop->op == BinaryOpKind::LE || bop->op == BinaryOpKind::GT || bop->op == BinaryOpKind::GE);
+    if (!is_range_op)
+        return std::nullopt;
 
-    const auto* left_cr  = std::get_if<bound::BoundColumnRef>(&bop->left->node);
+    const auto* left_cr = std::get_if<bound::BoundColumnRef>(&bop->left->node);
     const auto* right_cr = std::get_if<bound::BoundColumnRef>(&bop->right->node);
 
-    u32   col_idx;
+    u32 col_idx;
     Value lit_val;
-    bool  col_is_left;
+    bool col_is_left;
 
     if (left_cr && left_cr->ref.binding_id == 0) {
         auto lit = extract_literal_(*bop->right);
-        if (!lit) return std::nullopt;
-        col_idx     = left_cr->ref.column_idx;
-        lit_val     = *lit;
+        if (!lit)
+            return std::nullopt;
+        col_idx = left_cr->ref.column_idx;
+        lit_val = *lit;
         col_is_left = true;
     } else if (right_cr && right_cr->ref.binding_id == 0) {
         auto lit = extract_literal_(*bop->left);
-        if (!lit) return std::nullopt;
-        col_idx     = right_cr->ref.column_idx;
-        lit_val     = *lit;
+        if (!lit)
+            return std::nullopt;
+        col_idx = right_cr->ref.column_idx;
+        lit_val = *lit;
         col_is_left = false;
     } else {
         return std::nullopt;
@@ -143,7 +148,8 @@ std::optional<Planner::IndexScanChoice> Planner::try_index_scan_(
             break;
         }
     }
-    if (!found) return std::nullopt;
+    if (!found)
+        return std::nullopt;
 
     std::vector<Value> key = {lit_val};
     auto make_bnd = [&](bool incl) { return IndexScan::Bound{key, incl}; };
@@ -151,29 +157,53 @@ std::optional<Planner::IndexScanChoice> Planner::try_index_scan_(
     std::optional<IndexScan::Bound> lo, hi;
     if (col_is_left) {
         switch (bop->op) {
-        case BinaryOpKind::EQ: lo = make_bnd(true);  hi = make_bnd(true);  break;
-        case BinaryOpKind::LT: hi = make_bnd(false); break;
-        case BinaryOpKind::LE: hi = make_bnd(true);  break;
-        case BinaryOpKind::GT: lo = make_bnd(false); break;
-        case BinaryOpKind::GE: lo = make_bnd(true);  break;
-        default: return std::nullopt;
+        case BinaryOpKind::EQ:
+            lo = make_bnd(true);
+            hi = make_bnd(true);
+            break;
+        case BinaryOpKind::LT:
+            hi = make_bnd(false);
+            break;
+        case BinaryOpKind::LE:
+            hi = make_bnd(true);
+            break;
+        case BinaryOpKind::GT:
+            lo = make_bnd(false);
+            break;
+        case BinaryOpKind::GE:
+            lo = make_bnd(true);
+            break;
+        default:
+            return std::nullopt;
         }
     } else {
         switch (bop->op) {
-        case BinaryOpKind::EQ: lo = make_bnd(true);  hi = make_bnd(true);  break;
-        case BinaryOpKind::LT: lo = make_bnd(false); break;
-        case BinaryOpKind::LE: lo = make_bnd(true);  break;
-        case BinaryOpKind::GT: hi = make_bnd(false); break;
-        case BinaryOpKind::GE: hi = make_bnd(true);  break;
-        default: return std::nullopt;
+        case BinaryOpKind::EQ:
+            lo = make_bnd(true);
+            hi = make_bnd(true);
+            break;
+        case BinaryOpKind::LT:
+            lo = make_bnd(false);
+            break;
+        case BinaryOpKind::LE:
+            lo = make_bnd(true);
+            break;
+        case BinaryOpKind::GT:
+            hi = make_bnd(false);
+            break;
+        case BinaryOpKind::GE:
+            hi = make_bnd(true);
+            break;
+        default:
+            return std::nullopt;
         }
     }
 
     return IndexScanChoice{found, std::move(lo), std::move(hi)};
 }
 
-Result<std::unique_ptr<Operator>> Planner::build_scans_(const bound::BoundSelect& stmt,
-                                                        ColCtx& ctx, bool& where_consumed) {
+Result<std::unique_ptr<Operator>> Planner::build_scans_(const bound::BoundSelect& stmt, ColCtx& ctx,
+                                                        bool& where_consumed) {
     ctx.binding_offsets.resize(stmt.bindings.size(), 0u);
 
     auto [t0, scan0] = make_scan(catalog_, stmt.bindings[0]);

@@ -25,12 +25,15 @@ class Binder {
     Result<bound::BoundInsert> bind_insert(const ast::InsertStmt& stmt, std::string_view source);
     Result<bound::BoundDropTable> bind_drop_table(const ast::DropTableStmt& stmt,
                                                   std::string_view source);
-    Result<bound::BoundDelete>       bind_delete(const ast::DeleteStmt& stmt, std::string_view source);
-    Result<bound::BoundUpdate>       bind_update(const ast::UpdateStmt& stmt, std::string_view source);
-    Result<bound::BoundCreateIndex>  bind_create_index(const ast::CreateIndexStmt& stmt, std::string_view source);
-    Result<bound::BoundDropIndex>    bind_drop_index(const ast::DropIndexStmt& stmt, std::string_view source);
-    Result<bound::BoundShowIndexes>  bind_show_indexes(const ast::ShowIndexesStmt& stmt, std::string_view source);
-    Result<bound::BoundStatement>    bind(const ast::Statement& stmt, std::string_view source);
+    Result<bound::BoundDelete> bind_delete(const ast::DeleteStmt& stmt, std::string_view source);
+    Result<bound::BoundUpdate> bind_update(const ast::UpdateStmt& stmt, std::string_view source);
+    Result<bound::BoundCreateIndex> bind_create_index(const ast::CreateIndexStmt& stmt,
+                                                      std::string_view source);
+    Result<bound::BoundDropIndex> bind_drop_index(const ast::DropIndexStmt& stmt,
+                                                  std::string_view source);
+    Result<bound::BoundShowIndexes> bind_show_indexes(const ast::ShowIndexesStmt& stmt,
+                                                      std::string_view source);
+    Result<bound::BoundStatement> bind(const ast::Statement& stmt, std::string_view source);
 
   private:
     Result<bound::BoundExprPtr> bind_expr_(const ast::Expr& e);

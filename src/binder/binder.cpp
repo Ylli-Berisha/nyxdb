@@ -858,9 +858,9 @@ Result<bound::BoundCreateIndex> Binder::bind_create_index(const ast::CreateIndex
 
     for (const auto& m : catalog_.indexes_of(stmt.table_name)) {
         if (m.name == stmt.index_name)
-            return Result<bound::BoundCreateIndex>::err(
-                err_msg_("index '" + stmt.index_name + "' already exists on table '" +
-                         stmt.table_name + "'", SourceLoc{0, 0}));
+            return Result<bound::BoundCreateIndex>::err(err_msg_(
+                "index '" + stmt.index_name + "' already exists on table '" + stmt.table_name + "'",
+                SourceLoc{0, 0}));
     }
 
     std::vector<u8> col_indices;
@@ -879,8 +879,8 @@ Result<bound::BoundCreateIndex> Binder::bind_create_index(const ast::CreateIndex
         }
         if (!found)
             return Result<bound::BoundCreateIndex>::err(
-                err_msg_("column '" + col_name + "' not found in table '" +
-                         stmt.table_name + "'", SourceLoc{0, 0}));
+                err_msg_("column '" + col_name + "' not found in table '" + stmt.table_name + "'",
+                         SourceLoc{0, 0}));
     }
 
     return Result<bound::BoundCreateIndex>::ok(
@@ -888,7 +888,7 @@ Result<bound::BoundCreateIndex> Binder::bind_create_index(const ast::CreateIndex
 }
 
 Result<bound::BoundDropIndex> Binder::bind_drop_index(const ast::DropIndexStmt& stmt,
-                                                       std::string_view source) {
+                                                      std::string_view source) {
     source_ = source;
     if (!catalog_.has_table(stmt.table_name))
         return Result<bound::BoundDropIndex>::err(
@@ -903,14 +903,14 @@ Result<bound::BoundDropIndex> Binder::bind_drop_index(const ast::DropIndexStmt& 
     }
     if (!found)
         return Result<bound::BoundDropIndex>::err(
-            err_msg_("index '" + stmt.index_name + "' not found on table '" +
-                     stmt.table_name + "'", SourceLoc{0, 0}));
+            err_msg_("index '" + stmt.index_name + "' not found on table '" + stmt.table_name + "'",
+                     SourceLoc{0, 0}));
 
     return Result<bound::BoundDropIndex>::ok({stmt.table_name, stmt.index_name});
 }
 
 Result<bound::BoundShowIndexes> Binder::bind_show_indexes(const ast::ShowIndexesStmt& stmt,
-                                                           std::string_view source) {
+                                                          std::string_view source) {
     source_ = source;
     if (!catalog_.has_table(stmt.table_name))
         return Result<bound::BoundShowIndexes>::err(

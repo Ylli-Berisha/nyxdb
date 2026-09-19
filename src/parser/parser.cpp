@@ -304,7 +304,8 @@ Result<ast::Statement> Parser::parse_one_statement_() {
                 return Result<ast::Statement>::err(r.error().message);
             return Result<ast::Statement>::ok(ast::Statement{std::move(r.value())});
         } else {
-            return Result<ast::Statement>::err(err_msg_("expected TABLE or INDEX after CREATE", peek_(1)));
+            return Result<ast::Statement>::err(
+                err_msg_("expected TABLE or INDEX after CREATE", peek_(1)));
         }
     }
     case TokenKind::KW_INSERT: {
@@ -326,7 +327,8 @@ Result<ast::Statement> Parser::parse_one_statement_() {
                 return Result<ast::Statement>::err(r.error().message);
             return Result<ast::Statement>::ok(ast::Statement{std::move(r.value())});
         } else {
-            return Result<ast::Statement>::err(err_msg_("expected TABLE or INDEX after DROP", peek_(1)));
+            return Result<ast::Statement>::err(
+                err_msg_("expected TABLE or INDEX after DROP", peek_(1)));
         }
     }
     case TokenKind::KW_SHOW: {
@@ -782,8 +784,8 @@ Result<ast::CreateIndexStmt> Parser::parse_create_index_() {
     }
     if (!match_(TokenKind::RPAREN))
         return Result<ast::CreateIndexStmt>::err(err_msg_("expected ')'", peek_()));
-    return Result<ast::CreateIndexStmt>::ok({std::move(index_name), std::move(table_name),
-                                             std::move(cols), unique});
+    return Result<ast::CreateIndexStmt>::ok(
+        {std::move(index_name), std::move(table_name), std::move(cols), unique});
 }
 
 Result<ast::DropIndexStmt> Parser::parse_drop_index_() {

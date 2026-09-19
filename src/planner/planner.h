@@ -35,7 +35,7 @@ class Planner {
                 const std::vector<bound::BoundProjection>* projs = nullptr);
 
     struct IndexScanChoice {
-        BTreeIndex*                     index;
+        BTreeIndex* index;
         std::optional<IndexScan::Bound> lo;
         std::optional<IndexScan::Bound> hi;
     };
@@ -44,7 +44,7 @@ class Planner {
                                                    const bound::BoundExpr& where);
 
     Result<std::unique_ptr<Operator>> build_scans_(const bound::BoundSelect& stmt, ColCtx& ctx,
-                                                    bool& where_consumed);
+                                                   bool& where_consumed);
     Result<std::unique_ptr<Operator>> build_aggregate_(std::unique_ptr<Operator> child,
                                                        const bound::BoundSelect& stmt, ColCtx& ctx);
     Result<std::unique_ptr<Operator>> build_join_(std::unique_ptr<Operator> left,

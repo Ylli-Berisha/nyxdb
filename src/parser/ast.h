@@ -190,8 +190,7 @@ struct ShowIndexesStmt {
     std::string table_name;
 };
 
-using Statement =
-    std::variant<SelectStmt, CreateTableStmt, InsertStmt, DropTableStmt, DeleteStmt, UpdateStmt,
-                 CreateIndexStmt, DropIndexStmt, ShowIndexesStmt>;
+using Statement = std::variant<SelectStmt, CreateTableStmt, InsertStmt, DropTableStmt, DeleteStmt,
+                               UpdateStmt, CreateIndexStmt, DropIndexStmt, ShowIndexesStmt>;
 
 } // namespace nyx::ast

@@ -111,15 +111,16 @@ Result<ExecuteResult> Database::execute(const std::string& sql) {
                 ExecuteResult result;
                 result.schema = {
                     Column{"index_name", TypeId::VARCHAR, false, 255},
-                    Column{"columns",    TypeId::VARCHAR, false, 255},
-                    Column{"is_unique",  TypeId::BOOL,    false, 0},
+                    Column{"columns", TypeId::VARCHAR, false, 255},
+                    Column{"is_unique", TypeId::BOOL, false, 0},
                 };
                 result.columns.resize(3);
                 for (const auto& m : metas) {
                     result.columns[0].push_back(Value{m.name});
                     std::string col_list;
                     for (usize i = 0; i < m.col_indices.size(); ++i) {
-                        if (i > 0) col_list += ", ";
+                        if (i > 0)
+                            col_list += ", ";
                         const Schema* sch = catalog_.schema_of(stmt.table_name);
                         col_list += sch ? (*sch)[m.col_indices[i]].name : "?";
                     }

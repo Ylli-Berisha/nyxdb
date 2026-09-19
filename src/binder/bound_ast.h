@@ -168,10 +168,10 @@ struct BoundUpdate {
 };
 
 struct BoundCreateIndex {
-    std::string     table_name;
-    std::string     index_name;
+    std::string table_name;
+    std::string index_name;
     std::vector<u8> col_indices;
-    bool            unique = false;
+    bool unique = false;
 };
 
 struct BoundDropIndex {
@@ -183,9 +183,9 @@ struct BoundShowIndexes {
     std::string table_name;
 };
 
-using BoundStatement = std::variant<BoundSelect, BoundCreateTable, BoundInsert, BoundDropTable,
-                                    BoundDelete, BoundUpdate,
-                                    BoundCreateIndex, BoundDropIndex, BoundShowIndexes>;
+using BoundStatement =
+    std::variant<BoundSelect, BoundCreateTable, BoundInsert, BoundDropTable, BoundDelete,
+                 BoundUpdate, BoundCreateIndex, BoundDropIndex, BoundShowIndexes>;
 
 TypeId bound_expr_type(const BoundExpr& e);
 bool bound_expr_nullable(const BoundExpr& e);
