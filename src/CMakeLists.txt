@@ -34,7 +34,16 @@ add_library(nyxdb_core STATIC
 )
 
 target_include_directories(nyxdb_core PUBLIC ${CMAKE_SOURCE_DIR}/src)
-target_link_libraries(nyxdb_core PUBLIC spdlog::spdlog)
+target_link_libraries(nyxdb_core PUBLIC spdlog::spdlog nyxdb_warnings)
 
 add_executable(nyxdb main.cpp)
 target_link_libraries(nyxdb PRIVATE nyxdb_core)
+
+add_executable(nyxdb_server
+    main_server.cpp
+    server/wire.cpp
+    server/session.cpp
+    server/server.cpp
+)
+target_include_directories(nyxdb_server SYSTEM PRIVATE ${CMAKE_SOURCE_DIR}/third_party/msquic/src/inc)
+target_link_libraries(nyxdb_server PRIVATE nyxdb_core msquic)
