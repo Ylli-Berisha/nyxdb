@@ -36,6 +36,9 @@ class Binder {
     Result<bound::BoundStatement> bind(const ast::Statement& stmt, std::string_view source);
 
   private:
+    Result<bound::BoundShowConstraints> bind_show_constraints_(const ast::ShowConstraintsStmt& stmt,
+                                                               std::string_view source);
+
     Result<bound::BoundExprPtr> bind_expr_(const ast::Expr& e);
     Result<bound::BoundExprPtr> bind_int_lit_(const ast::IntLit& lit);
     Result<bound::BoundExprPtr> bind_double_lit_(const ast::DoubleLit& lit);

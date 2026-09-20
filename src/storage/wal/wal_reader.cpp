@@ -125,7 +125,128 @@ Result<std::vector<WalRecord>> WalReader::read_all() {
                 payload.insert(payload.end(), cname.begin(), cname.end());
                 pos += cname_len;
 
-                rec.schema.push_back({std::move(cname), type_id, nullable, max_len});
+                u8 has_default;
+                if (!read_exact(fd_, &has_default, 1)) {
+                    ok = false;
+                    break;
+                }
+                payload.push_back(has_default);
+                pos += 1;
+
+                std::optional<Value> def;
+                if (has_default) {
+                    u8 def_type_byte;
+                    if (!read_exact(fd_, &def_type_byte, 1)) {
+                        ok = false;
+                        break;
+                    }
+                    payload.push_back(def_type_byte);
+                    pos += 1;
+                    TypeId dt = static_cast<TypeId>(def_type_byte);
+                    u8 tmp[8];
+                    Value dv;
+                    switch (dt) {
+                    case TypeId::INT32: {
+                        if (!read_exact(fd_, tmp, 4)) {
+                            ok = false;
+                            break;
+                        }
+                        payload.insert(payload.end(), tmp, tmp + 4);
+                        pos += 4;
+                        i32 v;
+                        std::memcpy(&v, tmp, 4);
+                        dv = v;
+                        break;
+                    }
+                    case TypeId::INT64: {
+                        if (!read_exact(fd_, tmp, 8)) {
+                            ok = false;
+                            break;
+                        }
+                        payload.insert(payload.end(), tmp, tmp + 8);
+                        pos += 8;
+                        i64 v;
+                        std::memcpy(&v, tmp, 8);
+                        dv = v;
+                        break;
+                    }
+                    case TypeId::DOUBLE: {
+                        if (!read_exact(fd_, tmp, 8)) {
+                            ok = false;
+                            break;
+                        }
+                        payload.insert(payload.end(), tmp, tmp + 8);
+                        pos += 8;
+                        f64 v;
+                        std::memcpy(&v, tmp, 8);
+                        dv = v;
+                        break;
+                    }
+                    case TypeId::VARCHAR: {
+                        if (!read_exact(fd_, tmp, 2)) {
+                            ok = false;
+                            break;
+                        }
+                        payload.insert(payload.end(), tmp, tmp + 2);
+                        pos += 2;
+                        u16 slen = wal_read_u16(tmp);
+                        std::string s(slen, '\0');
+                        if (!read_exact(fd_, reinterpret_cast<u8*>(s.data()), slen)) {
+                            ok = false;
+                            break;
+                        }
+                        payload.insert(payload.end(), s.begin(), s.end());
+                        pos += slen;
+                        dv = std::move(s);
+                        break;
+                    }
+                    case TypeId::BOOL: {
+                        u8 b;
+                        if (!read_exact(fd_, &b, 1)) {
+                            ok = false;
+                            break;
+                        }
+                        payload.push_back(b);
+                        pos += 1;
+                        dv = (b != 0);
+                        break;
+                    }
+                    case TypeId::DATE: {
+                        if (!read_exact(fd_, tmp, 4)) {
+                            ok = false;
+                            break;
+                        }
+                        payload.insert(payload.end(), tmp, tmp + 4);
+                        pos += 4;
+                        i32 v;
+                        std::memcpy(&v, tmp, 4);
+                        dv = Date{v};
+                        break;
+                    }
+                    case TypeId::TIMESTAMP: {
+                        if (!read_exact(fd_, tmp, 8)) {
+                            ok = false;
+                            break;
+                        }
+                        payload.insert(payload.end(), tmp, tmp + 8);
+                        pos += 8;
+                        i64 v;
+                        std::memcpy(&v, tmp, 8);
+                        dv = Timestamp{v};
+                        break;
+                    }
+                    default:
+                        ok = false;
+                        break;
+                    }
+                    if (ok)
+                        def = std::move(dv);
+                }
+
+                if (!ok)
+                    break;
+                rec.schema.push_back(
+                    {std::move(cname), type_id, nullable, max_len, std::move(def)});
             }
             if (!ok)
                 break;

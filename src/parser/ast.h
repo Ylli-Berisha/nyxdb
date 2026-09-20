@@ -3,6 +3,7 @@
 #include "common/types.h"
 #include "executor/expression.h"
 #include "parser/source_loc.h"
+#include "storage/disk/value.h"
 
 #include <memory>
 #include <optional>
@@ -140,11 +141,21 @@ struct ColumnDef {
     TypeId type;
     bool nullable = true;
     u16 max_len = 255;
+    bool is_primary_key = false;
+    bool is_unique = false;
+    std::optional<Value> default_value;
+};
+
+struct TableConstraint {
+    enum Kind { PRIMARY_KEY, UNIQUE } kind;
+    std::string name;
+    std::vector<std::string> columns;
 };
 
 struct CreateTableStmt {
     std::string table_name;
     std::vector<ColumnDef> columns;
+    std::vector<TableConstraint> constraints;
 };
 
 struct InsertStmt {
@@ -190,7 +201,12 @@ struct ShowIndexesStmt {
     std::string table_name;
 };
 
-using Statement = std::variant<SelectStmt, CreateTableStmt, InsertStmt, DropTableStmt, DeleteStmt,
-                               UpdateStmt, CreateIndexStmt, DropIndexStmt, ShowIndexesStmt>;
+struct ShowConstraintsStmt {
+    std::string table_name;
+};
+
+using Statement =
+    std::variant<SelectStmt, CreateTableStmt, InsertStmt, DropTableStmt, DeleteStmt, UpdateStmt,
+                 CreateIndexStmt, DropIndexStmt, ShowIndexesStmt, ShowConstraintsStmt>;
 
 } // namespace nyx::ast

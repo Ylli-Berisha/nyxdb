@@ -2,7 +2,9 @@
 
 #include "common/source_error.h"
 
+#include <cstdio>
 #include <cstdlib>
+#include <limits>
 #include <optional>
 #include <string>
 #include <utility>
@@ -332,6 +334,12 @@ Result<ast::Statement> Parser::parse_one_statement_() {
         }
     }
     case TokenKind::KW_SHOW: {
+        if (peek_(1).kind == TokenKind::KW_CONSTRAINTS) {
+            auto r = parse_show_constraints_();
+            if (r.is_err())
+                return Result<ast::Statement>::err(r.error().message);
+            return Result<ast::Statement>::ok(ast::Statement{std::move(r.value())});
+        }
         auto r = parse_show_indexes_();
         if (r.is_err())
             return Result<ast::Statement>::err(r.error().message);
@@ -567,10 +575,19 @@ Result<ast::CreateTableStmt> Parser::parse_create_table_() {
     if (!match_(TokenKind::LPAREN))
         return Result<ast::CreateTableStmt>::err(err_msg_("expected '('", peek_()));
     while (true) {
-        auto col = parse_column_def_();
-        if (col.is_err())
-            return Result<ast::CreateTableStmt>::err(col.error().message);
-        stmt.columns.push_back(std::move(col.value()));
+        TokenKind pk = peek_().kind;
+        if (pk == TokenKind::KW_PRIMARY || pk == TokenKind::KW_UNIQUE ||
+            pk == TokenKind::KW_CONSTRAINT) {
+            auto tc = parse_table_constraint_();
+            if (tc.is_err())
+                return Result<ast::CreateTableStmt>::err(tc.error().message);
+            stmt.constraints.push_back(std::move(tc.value()));
+        } else {
+            auto col = parse_column_def_();
+            if (col.is_err())
+                return Result<ast::CreateTableStmt>::err(col.error().message);
+            stmt.columns.push_back(std::move(col.value()));
+        }
         if (!match_(TokenKind::COMMA))
             break;
     }
@@ -636,10 +653,30 @@ Result<ast::ColumnDef> Parser::parse_column_def_() {
         return Result<ast::ColumnDef>::err(err_msg_("expected column type", peek_()));
     }
 
-    if (match_(TokenKind::KW_NOT)) {
-        if (!match_(TokenKind::KW_NULL))
-            return Result<ast::ColumnDef>::err(err_msg_("expected NULL after NOT", peek_()));
-        def.nullable = false;
+    while (true) {
+        if (peek_().kind == TokenKind::KW_NOT) {
+            consume_();
+            if (!match_(TokenKind::KW_NULL))
+                return Result<ast::ColumnDef>::err(err_msg_("expected NULL after NOT", peek_()));
+            def.nullable = false;
+        } else if (peek_().kind == TokenKind::KW_PRIMARY) {
+            consume_();
+            if (!match_(TokenKind::KW_KEY))
+                return Result<ast::ColumnDef>::err(err_msg_("expected KEY after PRIMARY", peek_()));
+            def.is_primary_key = true;
+            def.nullable = false;
+        } else if (peek_().kind == TokenKind::KW_UNIQUE) {
+            consume_();
+            def.is_unique = true;
+        } else if (peek_().kind == TokenKind::KW_DEFAULT) {
+            consume_();
+            auto dv = parse_default_literal_();
+            if (dv.is_err())
+                return Result<ast::ColumnDef>::err(dv.error().message);
+            def.default_value = std::move(dv.value());
+        } else {
+            break;
+        }
     }
     return Result<ast::ColumnDef>::ok(std::move(def));
 }
@@ -812,6 +849,119 @@ Result<ast::ShowIndexesStmt> Parser::parse_show_indexes_() {
     if (peek_().kind != TokenKind::IDENTIFIER)
         return Result<ast::ShowIndexesStmt>::err(err_msg_("expected table name", peek_()));
     return Result<ast::ShowIndexesStmt>::ok({consume_().text});
+}
+
+Result<ast::ShowConstraintsStmt> Parser::parse_show_constraints_() {
+    consume_();
+    if (!match_(TokenKind::KW_CONSTRAINTS))
+        return Result<ast::ShowConstraintsStmt>::err(err_msg_("expected CONSTRAINTS", peek_()));
+    if (!match_(TokenKind::KW_FROM))
+        return Result<ast::ShowConstraintsStmt>::err(err_msg_("expected FROM", peek_()));
+    if (peek_().kind != TokenKind::IDENTIFIER)
+        return Result<ast::ShowConstraintsStmt>::err(err_msg_("expected table name", peek_()));
+    return Result<ast::ShowConstraintsStmt>::ok({consume_().text});
+}
+
+Result<Value> Parser::parse_default_literal_() {
+    switch (peek_().kind) {
+    case TokenKind::INT_LITERAL: {
+        i64 v = std::stoll(consume_().text);
+        if (v >= std::numeric_limits<i32>::min() && v <= std::numeric_limits<i32>::max())
+            return Result<Value>::ok(static_cast<i32>(v));
+        return Result<Value>::ok(v);
+    }
+    case TokenKind::DOUBLE_LITERAL:
+        return Result<Value>::ok(std::stod(consume_().text));
+    case TokenKind::STRING_LITERAL:
+        return Result<Value>::ok(consume_().text);
+    case TokenKind::KW_TRUE:
+        consume_();
+        return Result<Value>::ok(true);
+    case TokenKind::KW_FALSE:
+        consume_();
+        return Result<Value>::ok(false);
+    case TokenKind::KW_NULL:
+        consume_();
+        return Result<Value>::ok(Value{std::monostate{}});
+    case TokenKind::KW_DATE: {
+        consume_();
+        if (peek_().kind != TokenKind::STRING_LITERAL)
+            return Result<Value>::err(err_msg_("expected date string after DATE", peek_()));
+        std::string s = consume_().text;
+        int y = 0, m = 0, d = 0;
+        if (std::sscanf(s.c_str(), "%d-%d-%d", &y, &m, &d) != 3)
+            return Result<Value>::err(err_msg_("invalid DATE literal: " + s, peek_()));
+        i32 days = (y - 1970) * 365 + (y - 1970) / 4 - (y - 1970) / 100 + (y - 1970) / 400;
+        static const int month_days[] = {0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+        for (int i = 1; i < m; ++i)
+            days += month_days[i];
+        days += d - 1;
+        return Result<Value>::ok(Date{days});
+    }
+    case TokenKind::KW_TIMESTAMP: {
+        consume_();
+        if (peek_().kind != TokenKind::STRING_LITERAL)
+            return Result<Value>::err(
+                err_msg_("expected timestamp string after TIMESTAMP", peek_()));
+        std::string s = consume_().text;
+        int y = 0, mo = 0, d = 0, h = 0, mi = 0, se = 0;
+        std::sscanf(s.c_str(), "%d-%d-%d %d:%d:%d", &y, &mo, &d, &h, &mi, &se);
+        i32 days = (y - 1970) * 365 + (y - 1970) / 4 - (y - 1970) / 100 + (y - 1970) / 400;
+        static const int md[] = {0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+        for (int i = 1; i < mo; ++i)
+            days += md[i];
+        days += d - 1;
+        i64 micros = static_cast<i64>(days) * 86400000000LL + static_cast<i64>(h) * 3600000000LL +
+                     static_cast<i64>(mi) * 60000000LL + static_cast<i64>(se) * 1000000LL;
+        return Result<Value>::ok(Timestamp{micros});
+    }
+    default:
+        return Result<Value>::err(err_msg_("expected a literal value after DEFAULT", peek_()));
+    }
+}
+
+Result<ast::TableConstraint> Parser::parse_table_constraint_() {
+    ast::TableConstraint tc;
+    tc.kind = ast::TableConstraint::PRIMARY_KEY;
+
+    if (peek_().kind == TokenKind::KW_CONSTRAINT) {
+        consume_();
+        if (peek_().kind != TokenKind::IDENTIFIER)
+            return Result<ast::TableConstraint>::err(
+                err_msg_("expected constraint name after CONSTRAINT", peek_()));
+        tc.name = consume_().text;
+    }
+
+    if (peek_().kind == TokenKind::KW_PRIMARY) {
+        consume_();
+        if (!match_(TokenKind::KW_KEY))
+            return Result<ast::TableConstraint>::err(
+                err_msg_("expected KEY after PRIMARY", peek_()));
+        tc.kind = ast::TableConstraint::PRIMARY_KEY;
+    } else if (peek_().kind == TokenKind::KW_UNIQUE) {
+        consume_();
+        match_(TokenKind::KW_KEY);
+        tc.kind = ast::TableConstraint::UNIQUE;
+    } else {
+        return Result<ast::TableConstraint>::err(
+            err_msg_("expected PRIMARY KEY or UNIQUE", peek_()));
+    }
+
+    if (!match_(TokenKind::LPAREN))
+        return Result<ast::TableConstraint>::err(err_msg_("expected '('", peek_()));
+    while (true) {
+        if (peek_().kind != TokenKind::IDENTIFIER)
+            return Result<ast::TableConstraint>::err(err_msg_("expected column name", peek_()));
+        tc.columns.push_back(consume_().text);
+        if (!match_(TokenKind::COMMA))
+            break;
+    }
+    if (!match_(TokenKind::RPAREN))
+        return Result<ast::TableConstraint>::err(err_msg_("expected ')'", peek_()));
+    if (tc.columns.empty())
+        return Result<ast::TableConstraint>::err(
+            err_msg_("constraint must specify at least one column", peek_()));
+    return Result<ast::TableConstraint>::ok(std::move(tc));
 }
 
 } // namespace nyx

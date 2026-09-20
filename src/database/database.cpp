@@ -129,6 +129,30 @@ Result<ExecuteResult> Database::execute(const std::string& sql) {
                 }
                 return Result<ExecuteResult>::ok(std::move(result));
 
+            } else if constexpr (std::is_same_v<T, bound::BoundShowConstraints>) {
+                const auto& metas = catalog_.constraints_of(stmt.table_name);
+                ExecuteResult result;
+                result.schema = {
+                    Column{"constraint_name", TypeId::VARCHAR, false, 255},
+                    Column{"kind", TypeId::VARCHAR, false, 255},
+                    Column{"columns", TypeId::VARCHAR, false, 255},
+                };
+                result.columns.resize(3);
+                for (const auto& m : metas) {
+                    result.columns[0].push_back(Value{m.name});
+                    result.columns[1].push_back(Value{std::string(
+                        m.kind == ConstraintKind::PRIMARY_KEY ? "PRIMARY KEY" : "UNIQUE")});
+                    std::string col_list;
+                    const Schema* sch = catalog_.schema_of(stmt.table_name);
+                    for (usize i = 0; i < m.col_indices.size(); ++i) {
+                        if (i > 0)
+                            col_list += ", ";
+                        col_list += sch ? (*sch)[m.col_indices[i]].name : "?";
+                    }
+                    result.columns[2].push_back(Value{col_list});
+                }
+                return Result<ExecuteResult>::ok(std::move(result));
+
             } else {
                 static_assert(std::is_same_v<T, bound::BoundSelect>);
                 Planner pl(catalog_);

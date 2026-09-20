@@ -3,7 +3,9 @@
 #include "common/result.h"
 #include "common/types.h"
 #include "storage/disk/type_id.h"
+#include "storage/disk/value.h"
 
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -13,7 +15,8 @@ struct Column {
     std::string name;
     TypeId type;
     bool nullable;
-    u16 max_len = 0; // VARCHAR only
+    u16 max_len = 0;
+    std::optional<Value> default_value;
 };
 
 using Schema = std::vector<Column>;

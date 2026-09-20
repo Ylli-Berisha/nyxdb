@@ -108,6 +108,13 @@ Result<void> Catalog::create_table_(const std::string& name, Schema schema) {
     if (flush.is_err())
         return Result<void>::err("catalog: cannot flush table '" + name +
                                  "': " + flush.error().message);
+
+    std::string constraints_path = t.value().dir() + "/constraints.bin";
+    auto cw = ConstraintFile::write(constraints_path, {});
+    if (cw.is_err())
+        return Result<void>::err("catalog: cannot write constraints for '" + name +
+                                 "': " + cw.error().message);
+
     tables_.emplace(canonical, std::move(t.value()));
     return Result<void>::ok();
 }
@@ -169,6 +176,15 @@ Result<Catalog> Catalog::load(const std::string& data_root) {
         if (ec)
             return Result<Catalog>::err("catalog: index scan error for '" + tbl_name +
                                         "': " + ec.message());
+
+        std::string cpath = tbl.dir() + "/constraints.bin";
+        if (fs::exists(cpath)) {
+            auto cr = ConstraintFile::read(cpath);
+            if (cr.is_err())
+                return Result<Catalog>::err("catalog: read constraints for '" + tbl_name +
+                                            "': " + cr.error().message);
+            cat.constraint_meta_[tbl_name] = std::move(cr.value());
+        }
     }
 
     std::string wal_path = data_root + "/wal.bin";
@@ -269,14 +285,41 @@ Table* Catalog::table(const std::string& name) {
     return &it->second;
 }
 
-Result<void> Catalog::add_table(const std::string& name, Schema schema) {
+Result<void> Catalog::add_table(const std::string& name, Schema schema,
+                                std::vector<ConstraintMeta> constraints) {
     auto r = ensure_wal_();
     if (r.is_err())
         return r;
     auto lw = wal_->log_create_table(canonicalize(name), schema);
     if (lw.is_err())
         return lw;
-    return create_table_(name, std::move(schema));
+    auto cr = create_table_(name, std::move(schema));
+    if (cr.is_err())
+        return cr;
+
+    std::string canonical = canonicalize(name);
+    for (const auto& c : constraints) {
+        auto ir = add_index(name, c.name, c.col_indices, true);
+        if (ir.is_err())
+            return ir;
+        constraint_meta_[canonical].push_back(c);
+    }
+
+    if (!constraints.empty()) {
+        auto* tbl = table(name);
+        std::string cpath = tbl->dir() + "/constraints.bin";
+        auto cw = ConstraintFile::write(cpath, constraint_meta_[canonical]);
+        if (cw.is_err())
+            return cw;
+    }
+
+    return Result<void>::ok();
+}
+
+const std::vector<ConstraintMeta>& Catalog::constraints_of(const std::string& table_name) const {
+    static const std::vector<ConstraintMeta> empty;
+    auto it = constraint_meta_.find(canonicalize(table_name));
+    return it != constraint_meta_.end() ? it->second : empty;
 }
 
 Result<u64> Catalog::insert(const std::string& table_name,
@@ -303,8 +346,14 @@ Result<u64> Catalog::insert(const std::string& table_name,
             std::vector<byte> key_buf(btree.key_size());
             for (usize i = 0; i < rows.size(); ++i) {
                 std::vector<Value> key_vals(cidxs.size());
-                for (usize k = 0; k < cidxs.size(); ++k)
+                bool has_null = false;
+                for (usize k = 0; k < cidxs.size(); ++k) {
                     key_vals[k] = rows[i][cidxs[k]];
+                    if (nyx::is_null(key_vals[k]))
+                        has_null = true;
+                }
+                if (has_null)
+                    continue;
                 btree.encode_key(key_vals, key_buf.data());
                 bool found = false;
                 btree.range_scan(key_buf.data(), true, key_buf.data(), true, [&](u64) {
