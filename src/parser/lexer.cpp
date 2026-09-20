@@ -132,6 +132,14 @@ const char* token_kind_name(TokenKind kind) {
         return "DATE";
     case TokenKind::KW_TIMESTAMP:
         return "TIMESTAMP";
+    case TokenKind::KW_INDEX:
+        return "INDEX";
+    case TokenKind::KW_UNIQUE:
+        return "UNIQUE";
+    case TokenKind::KW_SHOW:
+        return "SHOW";
+    case TokenKind::KW_INDEXES:
+        return "INDEXES";
     case TokenKind::END_OF_FILE:
         return "EOF";
     }
@@ -183,6 +191,10 @@ static const std::unordered_map<std::string, TokenKind>& keyword_table() {
         {"false", TokenKind::KW_FALSE},
         {"date", TokenKind::KW_DATE},
         {"timestamp", TokenKind::KW_TIMESTAMP},
+        {"index", TokenKind::KW_INDEX},
+        {"unique", TokenKind::KW_UNIQUE},
+        {"show", TokenKind::KW_SHOW},
+        {"indexes", TokenKind::KW_INDEXES},
     };
     return table;
 }

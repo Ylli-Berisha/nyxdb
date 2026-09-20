@@ -27,6 +27,12 @@ class Binder {
                                                   std::string_view source);
     Result<bound::BoundDelete> bind_delete(const ast::DeleteStmt& stmt, std::string_view source);
     Result<bound::BoundUpdate> bind_update(const ast::UpdateStmt& stmt, std::string_view source);
+    Result<bound::BoundCreateIndex> bind_create_index(const ast::CreateIndexStmt& stmt,
+                                                      std::string_view source);
+    Result<bound::BoundDropIndex> bind_drop_index(const ast::DropIndexStmt& stmt,
+                                                  std::string_view source);
+    Result<bound::BoundShowIndexes> bind_show_indexes(const ast::ShowIndexesStmt& stmt,
+                                                      std::string_view source);
     Result<bound::BoundStatement> bind(const ast::Statement& stmt, std::string_view source);
 
   private:

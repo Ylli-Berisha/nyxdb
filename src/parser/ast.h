@@ -174,7 +174,23 @@ struct UpdateStmt {
     ExprPtr where;
 };
 
-using Statement =
-    std::variant<SelectStmt, CreateTableStmt, InsertStmt, DropTableStmt, DeleteStmt, UpdateStmt>;
+struct CreateIndexStmt {
+    std::string index_name;
+    std::string table_name;
+    std::vector<std::string> column_names;
+    bool unique = false;
+};
+
+struct DropIndexStmt {
+    std::string index_name;
+    std::string table_name;
+};
+
+struct ShowIndexesStmt {
+    std::string table_name;
+};
+
+using Statement = std::variant<SelectStmt, CreateTableStmt, InsertStmt, DropTableStmt, DeleteStmt,
+                               UpdateStmt, CreateIndexStmt, DropIndexStmt, ShowIndexesStmt>;
 
 } // namespace nyx::ast

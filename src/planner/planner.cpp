@@ -3,6 +3,7 @@
 #include "executor/filter.h"
 #include "executor/hash_aggregate.h"
 #include "executor/hash_join.h"
+#include "executor/index_scan.h"
 #include "executor/limit.h"
 #include "executor/project.h"
 #include "executor/sort.h"
@@ -77,8 +78,132 @@ static std::pair<Table*, std::unique_ptr<TableScan>> make_scan(Catalog& cat,
     return {t, std::make_unique<TableScan>(t, std::move(proj))};
 }
 
-Result<std::unique_ptr<Operator>> Planner::build_scans_(const bound::BoundSelect& stmt,
-                                                        ColCtx& ctx) {
+static std::optional<Value> extract_literal_(const bound::BoundExpr& e) {
+    return std::visit(
+        [](const auto& n) -> std::optional<Value> {
+            using T = std::decay_t<decltype(n)>;
+            if constexpr (std::is_same_v<T, bound::BoundIntLit>) {
+                if (n.type == TypeId::INT32)
+                    return Value{i32(n.value)};
+                return Value{i64(n.value)};
+            } else if constexpr (std::is_same_v<T, bound::BoundDoubleLit>) {
+                return Value{n.value};
+            } else if constexpr (std::is_same_v<T, bound::BoundStringLit>) {
+                return Value{n.value};
+            } else if constexpr (std::is_same_v<T, bound::BoundBoolLit>) {
+                return Value{n.value};
+            } else if constexpr (std::is_same_v<T, bound::BoundDateLit>) {
+                return Value{Date{n.days}};
+            } else if constexpr (std::is_same_v<T, bound::BoundTimestampLit>) {
+                return Value{Timestamp{n.micros}};
+            } else {
+                return std::nullopt;
+            }
+        },
+        e.node);
+}
+
+std::optional<Planner::IndexScanChoice> Planner::try_index_scan_(const bound::BoundBinding& binding,
+                                                                 const bound::BoundExpr& where) {
+
+    const auto* bop = std::get_if<bound::BoundBinaryOp>(&where.node);
+    if (!bop)
+        return std::nullopt;
+
+    bool is_range_op =
+        (bop->op == BinaryOpKind::EQ || bop->op == BinaryOpKind::LT ||
+         bop->op == BinaryOpKind::LE || bop->op == BinaryOpKind::GT || bop->op == BinaryOpKind::GE);
+    if (!is_range_op)
+        return std::nullopt;
+
+    const auto* left_cr = std::get_if<bound::BoundColumnRef>(&bop->left->node);
+    const auto* right_cr = std::get_if<bound::BoundColumnRef>(&bop->right->node);
+
+    u32 col_idx;
+    Value lit_val;
+    bool col_is_left;
+
+    if (left_cr && left_cr->ref.binding_id == 0) {
+        auto lit = extract_literal_(*bop->right);
+        if (!lit)
+            return std::nullopt;
+        col_idx = left_cr->ref.column_idx;
+        lit_val = *lit;
+        col_is_left = true;
+    } else if (right_cr && right_cr->ref.binding_id == 0) {
+        auto lit = extract_literal_(*bop->left);
+        if (!lit)
+            return std::nullopt;
+        col_idx = right_cr->ref.column_idx;
+        lit_val = *lit;
+        col_is_left = false;
+    } else {
+        return std::nullopt;
+    }
+
+    BTreeIndex* found = nullptr;
+    for (const auto& meta : catalog_.indexes_of(binding.table_name)) {
+        if (meta.col_indices.size() == 1 && meta.col_indices[0] == static_cast<u8>(col_idx)) {
+            found = catalog_.btree_index(binding.table_name, meta.name);
+            break;
+        }
+    }
+    if (!found)
+        return std::nullopt;
+
+    std::vector<Value> key = {lit_val};
+    auto make_bnd = [&](bool incl) { return IndexScan::Bound{key, incl}; };
+
+    std::optional<IndexScan::Bound> lo, hi;
+    if (col_is_left) {
+        switch (bop->op) {
+        case BinaryOpKind::EQ:
+            lo = make_bnd(true);
+            hi = make_bnd(true);
+            break;
+        case BinaryOpKind::LT:
+            hi = make_bnd(false);
+            break;
+        case BinaryOpKind::LE:
+            hi = make_bnd(true);
+            break;
+        case BinaryOpKind::GT:
+            lo = make_bnd(false);
+            break;
+        case BinaryOpKind::GE:
+            lo = make_bnd(true);
+            break;
+        default:
+            return std::nullopt;
+        }
+    } else {
+        switch (bop->op) {
+        case BinaryOpKind::EQ:
+            lo = make_bnd(true);
+            hi = make_bnd(true);
+            break;
+        case BinaryOpKind::LT:
+            lo = make_bnd(false);
+            break;
+        case BinaryOpKind::LE:
+            lo = make_bnd(true);
+            break;
+        case BinaryOpKind::GT:
+            hi = make_bnd(false);
+            break;
+        case BinaryOpKind::GE:
+            hi = make_bnd(true);
+            break;
+        default:
+            return std::nullopt;
+        }
+    }
+
+    return IndexScanChoice{found, std::move(lo), std::move(hi)};
+}
+
+Result<std::unique_ptr<Operator>> Planner::build_scans_(const bound::BoundSelect& stmt, ColCtx& ctx,
+                                                        bool& where_consumed) {
     ctx.binding_offsets.resize(stmt.bindings.size(), 0u);
 
     auto [t0, scan0] = make_scan(catalog_, stmt.bindings[0]);
@@ -86,8 +211,21 @@ Result<std::unique_ptr<Operator>> Planner::build_scans_(const bound::BoundSelect
         return Result<std::unique_ptr<Operator>>::err("unknown table: " +
                                                       stmt.bindings[0].table_name);
 
-    if (stmt.bindings.size() == 1)
+    if (stmt.bindings.size() == 1) {
+        if (stmt.where) {
+            auto choice = try_index_scan_(stmt.bindings[0], *stmt.where);
+            if (choice) {
+                size_t n = stmt.bindings[0].schema->size();
+                std::vector<size_t> proj(n);
+                std::iota(proj.begin(), proj.end(), 0);
+                where_consumed = true;
+                return Result<std::unique_ptr<Operator>>::ok(
+                    std::make_unique<IndexScan>(t0, choice->index, std::move(proj),
+                                                std::move(choice->lo), std::move(choice->hi)));
+            }
+        }
         return Result<std::unique_ptr<Operator>>::ok(std::move(scan0));
+    }
 
     auto [t1, scan1] = make_scan(catalog_, stmt.bindings[1]);
     if (!scan1)
@@ -281,13 +419,14 @@ std::unique_ptr<Operator> Planner::build_limit_(std::unique_ptr<Operator> child,
 
 Result<std::unique_ptr<Operator>> Planner::plan(const bound::BoundSelect& stmt) {
     ColCtx ctx;
+    bool where_consumed = false;
 
-    auto scans = build_scans_(stmt, ctx);
+    auto scans = build_scans_(stmt, ctx, where_consumed);
     if (!scans.is_ok())
         return scans;
     auto op = std::move(scans.value());
 
-    if (stmt.where)
+    if (stmt.where && !where_consumed)
         op = build_filter_(std::move(op), *stmt.where, ctx);
 
     if (stmt.is_aggregated) {

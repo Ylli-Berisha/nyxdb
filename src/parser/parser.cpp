@@ -292,10 +292,21 @@ Result<ast::Statement> Parser::parse_one_statement_() {
         return Result<ast::Statement>::ok(ast::Statement{std::move(r.value())});
     }
     case TokenKind::KW_CREATE: {
-        auto r = parse_create_table_();
-        if (r.is_err())
-            return Result<ast::Statement>::err(r.error().message);
-        return Result<ast::Statement>::ok(ast::Statement{std::move(r.value())});
+        TokenKind next = peek_(1).kind;
+        if (next == TokenKind::KW_TABLE) {
+            auto r = parse_create_table_();
+            if (r.is_err())
+                return Result<ast::Statement>::err(r.error().message);
+            return Result<ast::Statement>::ok(ast::Statement{std::move(r.value())});
+        } else if (next == TokenKind::KW_INDEX || next == TokenKind::KW_UNIQUE) {
+            auto r = parse_create_index_();
+            if (r.is_err())
+                return Result<ast::Statement>::err(r.error().message);
+            return Result<ast::Statement>::ok(ast::Statement{std::move(r.value())});
+        } else {
+            return Result<ast::Statement>::err(
+                err_msg_("expected TABLE or INDEX after CREATE", peek_(1)));
+        }
     }
     case TokenKind::KW_INSERT: {
         auto r = parse_insert_();
@@ -304,7 +315,24 @@ Result<ast::Statement> Parser::parse_one_statement_() {
         return Result<ast::Statement>::ok(ast::Statement{std::move(r.value())});
     }
     case TokenKind::KW_DROP: {
-        auto r = parse_drop_table_();
+        TokenKind next = peek_(1).kind;
+        if (next == TokenKind::KW_TABLE) {
+            auto r = parse_drop_table_();
+            if (r.is_err())
+                return Result<ast::Statement>::err(r.error().message);
+            return Result<ast::Statement>::ok(ast::Statement{std::move(r.value())});
+        } else if (next == TokenKind::KW_INDEX) {
+            auto r = parse_drop_index_();
+            if (r.is_err())
+                return Result<ast::Statement>::err(r.error().message);
+            return Result<ast::Statement>::ok(ast::Statement{std::move(r.value())});
+        } else {
+            return Result<ast::Statement>::err(
+                err_msg_("expected TABLE or INDEX after DROP", peek_(1)));
+        }
+    }
+    case TokenKind::KW_SHOW: {
+        auto r = parse_show_indexes_();
         if (r.is_err())
             return Result<ast::Statement>::err(r.error().message);
         return Result<ast::Statement>::ok(ast::Statement{std::move(r.value())});
@@ -729,6 +757,61 @@ Result<ast::UpdateStmt> Parser::parse_update_() {
         stmt.where = std::move(e.value());
     }
     return Result<ast::UpdateStmt>::ok(std::move(stmt));
+}
+
+Result<ast::CreateIndexStmt> Parser::parse_create_index_() {
+    consume_();
+    bool unique = match_(TokenKind::KW_UNIQUE);
+    if (!match_(TokenKind::KW_INDEX))
+        return Result<ast::CreateIndexStmt>::err(err_msg_("expected INDEX", peek_()));
+    if (peek_().kind != TokenKind::IDENTIFIER)
+        return Result<ast::CreateIndexStmt>::err(err_msg_("expected index name", peek_()));
+    std::string index_name = consume_().text;
+    if (!match_(TokenKind::KW_ON))
+        return Result<ast::CreateIndexStmt>::err(err_msg_("expected ON", peek_()));
+    if (peek_().kind != TokenKind::IDENTIFIER)
+        return Result<ast::CreateIndexStmt>::err(err_msg_("expected table name", peek_()));
+    std::string table_name = consume_().text;
+    if (!match_(TokenKind::LPAREN))
+        return Result<ast::CreateIndexStmt>::err(err_msg_("expected '('", peek_()));
+    std::vector<std::string> cols;
+    while (true) {
+        if (peek_().kind != TokenKind::IDENTIFIER)
+            return Result<ast::CreateIndexStmt>::err(err_msg_("expected column name", peek_()));
+        cols.push_back(consume_().text);
+        if (!match_(TokenKind::COMMA))
+            break;
+    }
+    if (!match_(TokenKind::RPAREN))
+        return Result<ast::CreateIndexStmt>::err(err_msg_("expected ')'", peek_()));
+    return Result<ast::CreateIndexStmt>::ok(
+        {std::move(index_name), std::move(table_name), std::move(cols), unique});
+}
+
+Result<ast::DropIndexStmt> Parser::parse_drop_index_() {
+    consume_();
+    if (!match_(TokenKind::KW_INDEX))
+        return Result<ast::DropIndexStmt>::err(err_msg_("expected INDEX", peek_()));
+    if (peek_().kind != TokenKind::IDENTIFIER)
+        return Result<ast::DropIndexStmt>::err(err_msg_("expected index name", peek_()));
+    std::string index_name = consume_().text;
+    if (!match_(TokenKind::KW_ON))
+        return Result<ast::DropIndexStmt>::err(err_msg_("expected ON", peek_()));
+    if (peek_().kind != TokenKind::IDENTIFIER)
+        return Result<ast::DropIndexStmt>::err(err_msg_("expected table name", peek_()));
+    std::string table_name = consume_().text;
+    return Result<ast::DropIndexStmt>::ok({std::move(index_name), std::move(table_name)});
+}
+
+Result<ast::ShowIndexesStmt> Parser::parse_show_indexes_() {
+    consume_();
+    if (!match_(TokenKind::KW_INDEXES))
+        return Result<ast::ShowIndexesStmt>::err(err_msg_("expected INDEXES", peek_()));
+    if (!match_(TokenKind::KW_FROM))
+        return Result<ast::ShowIndexesStmt>::err(err_msg_("expected FROM", peek_()));
+    if (peek_().kind != TokenKind::IDENTIFIER)
+        return Result<ast::ShowIndexesStmt>::err(err_msg_("expected table name", peek_()));
+    return Result<ast::ShowIndexesStmt>::ok({consume_().text});
 }
 
 } // namespace nyx
