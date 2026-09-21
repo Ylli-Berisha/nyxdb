@@ -386,9 +386,12 @@ Result<u64> Catalog::insert(const std::string& table_name,
                     continue;
                 btree.encode_key(key_vals, key_buf.data());
                 bool found = false;
-                btree.range_scan(key_buf.data(), true, key_buf.data(), true, [&](u64) {
-                    found = true;
-                    return false;
+                btree.range_scan(key_buf.data(), true, key_buf.data(), true, [&](u64 row_id) {
+                    if (!it->second.is_row_deleted(row_id)) {
+                        found = true;
+                        return false;
+                    }
+                    return true;
                 });
                 if (found)
                     return Result<u64>::err("unique constraint violation");
@@ -595,26 +598,40 @@ BTreeIndex* Catalog::btree_index(const std::string& table_name, const std::strin
 }
 
 Result<void> Catalog::bulk_build_index_(BTreeIndex& idx, Table& tbl) {
-    u64 n = tbl.row_count();
-    const auto& deleted = tbl.deleted_bitmap();
     const auto& cidxs = idx.col_indices();
-
     std::vector<std::pair<std::vector<byte>, u64>> entries;
     std::vector<byte> key_buf(idx.key_size());
 
-    for (u64 row_id = 0; row_id < n; ++row_id) {
-        usize byte_idx = row_id / 8;
-        u8 bit = static_cast<u8>(1u << (row_id % 8));
-        if (byte_idx < deleted.size() && (deleted[byte_idx] & bit))
-            continue;
+    for (const auto& seg : tbl.segments()) {
+        const auto& bm = seg.deleted_bitmap();
+        u64 base = seg.meta().base_row_id;
+        u64 count = seg.meta().row_count;
+        for (u64 local = 0; local < count; ++local) {
+            usize byte_idx = local / 8;
+            if (byte_idx < bm.size() && ((bm[byte_idx] >> (local % 8)) & 1u))
+                continue;
+            std::vector<Value> key_vals;
+            key_vals.reserve(cidxs.size());
+            for (u8 ci : cidxs)
+                key_vals.push_back(read_col_value(const_cast<Segment&>(seg).column(ci), local));
+            idx.encode_key(key_vals, key_buf.data());
+            entries.emplace_back(std::vector<byte>(key_buf), base + local);
+        }
+    }
 
+    u64 wb_base = tbl.wb_base_row_id();
+    u64 wb_count = tbl.wb_columns_ref().empty() ? 0 : tbl.wb_columns_ref()[0].row_count();
+    const auto& wb_bm = tbl.wb_deleted_ref();
+    for (u64 local = 0; local < wb_count; ++local) {
+        usize byte_idx = local / 8;
+        if (byte_idx < wb_bm.size() && ((wb_bm[byte_idx] >> (local % 8)) & 1u))
+            continue;
         std::vector<Value> key_vals;
         key_vals.reserve(cidxs.size());
         for (u8 ci : cidxs)
-            key_vals.push_back(read_col_value(tbl.column(ci), row_id));
-
+            key_vals.push_back(read_col_value(const_cast<Table&>(tbl).column(ci), local));
         idx.encode_key(key_vals, key_buf.data());
-        entries.emplace_back(std::vector<byte>(key_buf), row_id);
+        entries.emplace_back(std::vector<byte>(key_buf), wb_base + local);
     }
 
     std::sort(entries.begin(), entries.end(), [&](const auto& a, const auto& b) {

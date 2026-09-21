@@ -394,6 +394,30 @@ Result<Table::UpdateMeta> Table::update_rows(const std::vector<u64>& old_indices
     return Result<UpdateMeta>::ok({first_row_id, wb_base_before, wb_base_row_id_});
 }
 
+bool Table::is_row_deleted(u64 global_id) const {
+    std::shared_lock lk(*rwlock_);
+    if (global_id >= wb_base_row_id_) {
+        u64 local = global_id - wb_base_row_id_;
+        usize byte_idx = local / 8;
+        if (byte_idx >= wb_deleted_.size())
+            return false;
+        return (wb_deleted_[byte_idx] >> (local % 8)) & 1u;
+    }
+    for (const auto& seg : segments_) {
+        u64 base = seg.meta().base_row_id;
+        u64 count = seg.meta().row_count;
+        if (global_id < base || global_id >= base + count)
+            continue;
+        u64 local = global_id - base;
+        const auto& bm = seg.deleted_bitmap();
+        usize byte_idx = local / 8;
+        if (byte_idx >= bm.size())
+            return false;
+        return (bm[byte_idx] >> (local % 8)) & 1u;
+    }
+    return false;
+}
+
 Result<void> Table::mark_deleted_nolock_(const std::vector<u64>& row_indices) {
     if (row_indices.empty())
         return Result<void>::ok();

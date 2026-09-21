@@ -44,6 +44,7 @@ class Table {
 
     bool has_deletions() const { return !wb_deleted_.empty(); }
     const std::vector<u8>& deleted_bitmap() const { return wb_deleted_; }
+    bool is_row_deleted(u64 global_id) const;
     Result<void> mark_deleted(const std::vector<u64>& row_indices);
     Result<void> clear_deletions();
 
