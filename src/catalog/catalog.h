@@ -8,7 +8,9 @@
 #include "storage/disk/value.h"
 #include "storage/wal/wal_writer.h"
 
+#include <memory>
 #include <optional>
+#include <shared_mutex>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -62,6 +64,7 @@ class Catalog {
     Result<void> rebuild_index_(BTreeIndex& idx, Table& tbl);
 
     std::string data_root_;
+    mutable std::unique_ptr<std::shared_mutex> tables_mu_;
     std::unordered_map<std::string, Table> tables_;
     std::optional<WalWriter> wal_;
     std::unordered_map<std::string, std::vector<ConstraintMeta>> constraint_meta_;

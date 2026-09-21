@@ -105,6 +105,7 @@ Result<u64> run_delete(Catalog& catalog, const bound::BoundDelete& stmt) {
         }
     }
 
+    scan.close();
     return catalog.delete_rows(stmt.table_name, to_delete);
 }
 
@@ -195,6 +196,7 @@ Result<u64> run_update(Catalog& catalog, const bound::BoundUpdate& stmt) {
         }
     }
 
+    scan.close();
     return catalog.update_rows(stmt.table_name, old_indices, stmt.schema, new_rows);
 }
 

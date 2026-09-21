@@ -84,7 +84,8 @@ static Value read_col_value(ColumnFile& cf, u64 row_id) {
     }
 }
 
-Catalog::Catalog(std::string data_root) : data_root_(std::move(data_root)) {}
+Catalog::Catalog(std::string data_root)
+    : data_root_(std::move(data_root)), tables_mu_(std::make_unique<std::shared_mutex>()) {}
 
 Result<void> Catalog::ensure_wal_() {
     if (wal_.has_value())
@@ -268,10 +269,12 @@ Result<Catalog> Catalog::load(const std::string& data_root) {
 }
 
 bool Catalog::has_table(const std::string& name) const {
+    std::shared_lock lk(*tables_mu_);
     return tables_.find(canonicalize(name)) != tables_.end();
 }
 
 const Schema* Catalog::schema_of(const std::string& name) const {
+    std::shared_lock lk(*tables_mu_);
     auto it = tables_.find(canonicalize(name));
     if (it == tables_.end())
         return nullptr;
@@ -279,6 +282,7 @@ const Schema* Catalog::schema_of(const std::string& name) const {
 }
 
 Table* Catalog::table(const std::string& name) {
+    std::shared_lock lk(*tables_mu_);
     auto it = tables_.find(canonicalize(name));
     if (it == tables_.end())
         return nullptr;
