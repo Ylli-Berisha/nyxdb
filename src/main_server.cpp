@@ -14,7 +14,7 @@ int main(int argc, char** argv) {
     std::string data_dir;
     std::string token;
     std::string log_level = "warn";
-    uint16_t    port      = 4433;
+    uint16_t port = 4433;
 
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];

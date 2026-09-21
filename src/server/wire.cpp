@@ -15,7 +15,7 @@ void encode_u16(std::vector<byte>& buf, u16 v) {
 
 void encode_u32(std::vector<byte>& buf, u32 v) {
     buf.push_back(static_cast<byte>(v & 0xFFu));
-    buf.push_back(static_cast<byte>((v >> 8)  & 0xFFu));
+    buf.push_back(static_cast<byte>((v >> 8) & 0xFFu));
     buf.push_back(static_cast<byte>((v >> 16) & 0xFFu));
     buf.push_back(static_cast<byte>((v >> 24) & 0xFFu));
 }
@@ -92,8 +92,8 @@ bool decode_header(const byte* data, usize len, FrameHeader& out) {
     u32 length = 0;
     for (int i = 0; i < 4; ++i)
         length |= static_cast<u32>(static_cast<u8>(data[i])) << (i * 8);
-    out.length   = length;
-    out.type     = static_cast<FrameType>(static_cast<u8>(data[4]));
+    out.length = length;
+    out.type = static_cast<FrameType>(static_cast<u8>(data[4]));
     u32 qid = 0;
     for (int i = 0; i < 4; ++i)
         qid |= static_cast<u32>(static_cast<u8>(data[5 + i])) << (i * 8);

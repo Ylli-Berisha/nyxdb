@@ -4,8 +4,7 @@
 
 namespace nyx::server {
 
-Session::Session(Database* db, std::string token, HQUIC connection,
-                 const QUIC_API_TABLE* api)
+Session::Session(Database* db, std::string token, HQUIC connection, const QUIC_API_TABLE* api)
     : db_(db), token_(std::move(token)), connection_(connection), api_(api) {}
 
 void Session::on_stream(HQUIC stream) {
@@ -22,8 +21,8 @@ void Session::on_data(const byte* data, usize len) {
         if (recv_buf_.size() < hdr.length)
             break;
 
-        const byte* payload     = recv_buf_.data() + FRAME_HEADER_SIZE;
-        usize       payload_len = hdr.length - FRAME_HEADER_SIZE;
+        const byte* payload = recv_buf_.data() + FRAME_HEADER_SIZE;
+        usize payload_len = hdr.length - FRAME_HEADER_SIZE;
 
         switch (hdr.type) {
         case FrameType::AUTH_REQ:
@@ -59,7 +58,6 @@ void Session::handle_auth_req_(const byte* payload, usize payload_len, u32 qid) 
         send_frame_(std::move(buf));
     } else {
         send_err_(qid, FrameType::AUTH_ERR, "invalid token");
-        close();
     }
 }
 
