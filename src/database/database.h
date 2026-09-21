@@ -4,7 +4,9 @@
 #include "common/result.h"
 #include "storage/disk/schema.h"
 #include "storage/disk/value.h"
+#include "storage/merge_worker.h"
 
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -28,11 +30,14 @@ class Database {
     Database& operator=(Database&&) noexcept = default;
 
     Result<ExecuteResult> execute(const std::string& sql);
-    Result<void> flush() { return catalog_.flush_all(); }
+    Result<void> flush() { return catalog_->flush_all(); }
+
+    ~Database();
 
   private:
     explicit Database(Catalog catalog);
-    Catalog catalog_;
+    std::unique_ptr<Catalog> catalog_;
+    std::unique_ptr<MergeWorker> merge_worker_;
 };
 
 } // namespace nyx

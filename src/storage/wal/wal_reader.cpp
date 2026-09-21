@@ -68,7 +68,8 @@ Result<std::vector<WalRecord>> WalReader::read_all() {
             break;
 
         if (type_byte != WAL_TYPE_INSERT && type_byte != WAL_TYPE_CREATE &&
-            type_byte != WAL_TYPE_DELETE && type_byte != WAL_TYPE_UPDATE)
+            type_byte != WAL_TYPE_DELETE && type_byte != WAL_TYPE_UPDATE &&
+            type_byte != WAL_TYPE_SEGMENT_FLUSH)
             break;
 
         u64 record_start = pos;
@@ -417,6 +418,14 @@ Result<std::vector<WalRecord>> WalReader::read_all() {
             }
             if (!ok)
                 break;
+
+        } else if (type_byte == WAL_TYPE_SEGMENT_FLUSH) {
+            u8 cnt_bytes[8];
+            if (!read_exact(fd_, cnt_bytes, 8))
+                break;
+            payload.insert(payload.end(), cnt_bytes, cnt_bytes + 8);
+            pos += 8;
+            rec.sealed_row_count = wal_read_u64(cnt_bytes);
 
         } else {
             u8 counts[6];

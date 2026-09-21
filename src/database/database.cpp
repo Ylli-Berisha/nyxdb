@@ -32,7 +32,16 @@ static Value extract(const ColumnVector& col, size_t row) {
     }
 }
 
-Database::Database(Catalog catalog) : catalog_(std::move(catalog)) {}
+Database::Database(Catalog catalog)
+    : catalog_(std::make_unique<Catalog>(std::move(catalog))),
+      merge_worker_(std::make_unique<MergeWorker>(catalog_.get())) {
+    merge_worker_->start();
+}
+
+Database::~Database() {
+    if (merge_worker_)
+        merge_worker_->stop();
+}
 
 Result<Database> Database::open(const std::string& data_root) {
     std::filesystem::create_directories(data_root);
@@ -55,7 +64,7 @@ Result<ExecuteResult> Database::execute(const std::string& sql) {
     if (stmts.value().empty())
         return Result<ExecuteResult>::ok({});
 
-    Binder b(catalog_);
+    Binder b(*catalog_);
     auto bound = b.bind(stmts.value()[0], sql);
     if (!bound.is_ok())
         return Result<ExecuteResult>::err(bound.error());
@@ -65,49 +74,49 @@ Result<ExecuteResult> Database::execute(const std::string& sql) {
             using T = std::decay_t<decltype(stmt)>;
 
             if constexpr (std::is_same_v<T, bound::BoundCreateTable>) {
-                auto r = frontend::run_create_table(catalog_, stmt);
+                auto r = frontend::run_create_table(*catalog_, stmt);
                 if (!r.is_ok())
                     return Result<ExecuteResult>::err(r.error());
                 return Result<ExecuteResult>::ok({});
 
             } else if constexpr (std::is_same_v<T, bound::BoundInsert>) {
-                auto r = frontend::run_insert(catalog_, stmt);
+                auto r = frontend::run_insert(*catalog_, stmt);
                 if (!r.is_ok())
                     return Result<ExecuteResult>::err(r.error());
                 return Result<ExecuteResult>::ok({{}, {}, r.value()});
 
             } else if constexpr (std::is_same_v<T, bound::BoundDropTable>) {
-                auto r = frontend::run_drop_table(catalog_, stmt);
+                auto r = frontend::run_drop_table(*catalog_, stmt);
                 if (!r.is_ok())
                     return Result<ExecuteResult>::err(r.error());
                 return Result<ExecuteResult>::ok({});
 
             } else if constexpr (std::is_same_v<T, bound::BoundDelete>) {
-                auto r = frontend::run_delete(catalog_, stmt);
+                auto r = frontend::run_delete(*catalog_, stmt);
                 if (!r.is_ok())
                     return Result<ExecuteResult>::err(r.error());
                 return Result<ExecuteResult>::ok({{}, {}, r.value()});
 
             } else if constexpr (std::is_same_v<T, bound::BoundUpdate>) {
-                auto r = frontend::run_update(catalog_, stmt);
+                auto r = frontend::run_update(*catalog_, stmt);
                 if (!r.is_ok())
                     return Result<ExecuteResult>::err(r.error());
                 return Result<ExecuteResult>::ok({{}, {}, r.value()});
 
             } else if constexpr (std::is_same_v<T, bound::BoundCreateIndex>) {
-                auto r = frontend::run_create_index(catalog_, stmt);
+                auto r = frontend::run_create_index(*catalog_, stmt);
                 if (!r.is_ok())
                     return Result<ExecuteResult>::err(r.error());
                 return Result<ExecuteResult>::ok({});
 
             } else if constexpr (std::is_same_v<T, bound::BoundDropIndex>) {
-                auto r = frontend::run_drop_index(catalog_, stmt);
+                auto r = frontend::run_drop_index(*catalog_, stmt);
                 if (!r.is_ok())
                     return Result<ExecuteResult>::err(r.error());
                 return Result<ExecuteResult>::ok({});
 
             } else if constexpr (std::is_same_v<T, bound::BoundShowIndexes>) {
-                const auto& metas = catalog_.indexes_of(stmt.table_name);
+                const auto& metas = catalog_->indexes_of(stmt.table_name);
                 ExecuteResult result;
                 result.schema = {
                     Column{"index_name", TypeId::VARCHAR, false, 255},
@@ -121,7 +130,7 @@ Result<ExecuteResult> Database::execute(const std::string& sql) {
                     for (usize i = 0; i < m.col_indices.size(); ++i) {
                         if (i > 0)
                             col_list += ", ";
-                        const Schema* sch = catalog_.schema_of(stmt.table_name);
+                        const Schema* sch = catalog_->schema_of(stmt.table_name);
                         col_list += sch ? (*sch)[m.col_indices[i]].name : "?";
                     }
                     result.columns[1].push_back(Value{col_list});
@@ -130,7 +139,7 @@ Result<ExecuteResult> Database::execute(const std::string& sql) {
                 return Result<ExecuteResult>::ok(std::move(result));
 
             } else if constexpr (std::is_same_v<T, bound::BoundShowConstraints>) {
-                const auto& metas = catalog_.constraints_of(stmt.table_name);
+                const auto& metas = catalog_->constraints_of(stmt.table_name);
                 ExecuteResult result;
                 result.schema = {
                     Column{"constraint_name", TypeId::VARCHAR, false, 255},
@@ -143,7 +152,7 @@ Result<ExecuteResult> Database::execute(const std::string& sql) {
                     result.columns[1].push_back(Value{std::string(
                         m.kind == ConstraintKind::PRIMARY_KEY ? "PRIMARY KEY" : "UNIQUE")});
                     std::string col_list;
-                    const Schema* sch = catalog_.schema_of(stmt.table_name);
+                    const Schema* sch = catalog_->schema_of(stmt.table_name);
                     for (usize i = 0; i < m.col_indices.size(); ++i) {
                         if (i > 0)
                             col_list += ", ";
@@ -155,7 +164,7 @@ Result<ExecuteResult> Database::execute(const std::string& sql) {
 
             } else {
                 static_assert(std::is_same_v<T, bound::BoundSelect>);
-                Planner pl(catalog_);
+                Planner pl(*catalog_);
                 auto plan_r = pl.plan(stmt);
                 if (!plan_r.is_ok())
                     return Result<ExecuteResult>::err(plan_r.error());

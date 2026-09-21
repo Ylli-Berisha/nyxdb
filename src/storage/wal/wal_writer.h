@@ -26,6 +26,7 @@ class WalWriter {
     Result<void> log_delete(const std::string& table, const std::vector<u64>& row_indices);
     Result<void> log_update(const std::string& table, const std::vector<u64>& old_indices,
                             const Schema& schema, const std::vector<std::vector<Value>>& new_rows);
+    Result<void> log_segment_flush(const std::string& table, u64 sealed_row_count);
 
     u64 current_offset() const { return offset_; }
     Result<void> checkpoint();

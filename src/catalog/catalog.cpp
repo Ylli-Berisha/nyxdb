@@ -84,7 +84,8 @@ static Value read_col_value(ColumnFile& cf, u64 row_id) {
     }
 }
 
-Catalog::Catalog(std::string data_root) : data_root_(std::move(data_root)) {}
+Catalog::Catalog(std::string data_root)
+    : data_root_(std::move(data_root)), tables_mu_(std::make_unique<std::shared_mutex>()) {}
 
 Result<void> Catalog::ensure_wal_() {
     if (wal_.has_value())
@@ -212,16 +213,33 @@ Result<Catalog> Catalog::load(const std::string& data_root) {
     }
 
     std::unordered_map<std::string, LsnCheckpoint> lsns;
+    for (auto& [name, tbl] : cat.tables_)
+        lsns[name] = read_lsn(tbl.dir());
+
+    for (const auto& rec : records) {
+        if (rec.type != WalRecord::Type::SegmentFlush)
+            continue;
+        std::string canonical = canonicalize(rec.table_name);
+        auto it = lsns.find(canonical);
+        if (it == lsns.end())
+            continue;
+        if (rec.byte_offset > it->second.lsn) {
+            it->second.lsn = rec.byte_offset;
+            it->second.rows = rec.sealed_row_count;
+        }
+    }
+
     for (auto& [name, tbl] : cat.tables_) {
-        LsnCheckpoint cp = read_lsn(tbl.dir());
-        lsns[name] = cp;
-        auto tr = tbl.truncate(cp.rows);
+        auto it = lsns.find(name);
+        if (it == lsns.end())
+            continue;
+        auto tr = tbl.truncate(it->second.rows);
         if (tr.is_err())
             return Result<Catalog>::err("catalog: truncate '" + name + "': " + tr.error().message);
     }
 
     for (const auto& rec : records) {
-        if (rec.type == WalRecord::Type::CreateTable)
+        if (rec.type == WalRecord::Type::CreateTable || rec.type == WalRecord::Type::SegmentFlush)
             continue;
         std::string canonical = canonicalize(rec.table_name);
         auto it = cat.tables_.find(canonical);
@@ -268,10 +286,12 @@ Result<Catalog> Catalog::load(const std::string& data_root) {
 }
 
 bool Catalog::has_table(const std::string& name) const {
+    std::shared_lock lk(*tables_mu_);
     return tables_.find(canonicalize(name)) != tables_.end();
 }
 
 const Schema* Catalog::schema_of(const std::string& name) const {
+    std::shared_lock lk(*tables_mu_);
     auto it = tables_.find(canonicalize(name));
     if (it == tables_.end())
         return nullptr;
@@ -279,10 +299,20 @@ const Schema* Catalog::schema_of(const std::string& name) const {
 }
 
 Table* Catalog::table(const std::string& name) {
+    std::shared_lock lk(*tables_mu_);
     auto it = tables_.find(canonicalize(name));
     if (it == tables_.end())
         return nullptr;
     return &it->second;
+}
+
+std::vector<std::string> Catalog::table_names() const {
+    std::shared_lock lk(*tables_mu_);
+    std::vector<std::string> names;
+    names.reserve(tables_.size());
+    for (const auto& [name, _] : tables_)
+        names.push_back(name);
+    return names;
 }
 
 Result<void> Catalog::add_table(const std::string& name, Schema schema,
@@ -356,9 +386,12 @@ Result<u64> Catalog::insert(const std::string& table_name,
                     continue;
                 btree.encode_key(key_vals, key_buf.data());
                 bool found = false;
-                btree.range_scan(key_buf.data(), true, key_buf.data(), true, [&](u64) {
-                    found = true;
-                    return false;
+                btree.range_scan(key_buf.data(), true, key_buf.data(), true, [&](u64 row_id) {
+                    if (!it->second.is_row_deleted(row_id)) {
+                        found = true;
+                        return false;
+                    }
+                    return true;
                 });
                 if (found)
                     return Result<u64>::err("unique constraint violation");
@@ -367,9 +400,17 @@ Result<u64> Catalog::insert(const std::string& table_name,
     }
 
     u64 first_row_id = it->second.row_count();
+    u64 wb_base_before = it->second.wb_base_row_id();
     auto ir = it->second.insert_many(rows);
     if (ir.is_err())
         return ir;
+
+    u64 wb_base_after = it->second.wb_base_row_id();
+    if (wb_base_after > wb_base_before) {
+        auto sf = wal_->log_segment_flush(canonical, wb_base_after);
+        if (sf.is_err())
+            return Result<u64>::err(sf.error().message);
+    }
 
     if (idx_it != indexes_.end()) {
         for (auto& btree : idx_it->second) {
@@ -435,14 +476,15 @@ Result<u64> Catalog::update_rows(const std::string& name, const std::vector<u64>
     if (lw.is_err())
         return Result<u64>::err(lw.error().message);
 
-    auto dr = it->second.mark_deleted(old_indices);
-    if (dr.is_err())
-        return Result<u64>::err(dr.error().message);
+    auto ur = it->second.update_rows(old_indices, new_rows);
+    if (ur.is_err())
+        return Result<u64>::err(ur.error().message);
 
-    u64 first_row_id = it->second.row_count();
-    auto ir = it->second.insert_many(new_rows);
-    if (ir.is_err())
-        return Result<u64>::err(ir.error().message);
+    if (ur.value().wb_base_after > ur.value().wb_base_before) {
+        auto sf = wal_->log_segment_flush(canonical, ur.value().wb_base_after);
+        if (sf.is_err())
+            return Result<u64>::err(sf.error().message);
+    }
 
     auto idx_it = indexes_.find(canonical);
     if (idx_it != indexes_.end()) {
@@ -452,7 +494,7 @@ Result<u64> Catalog::update_rows(const std::string& name, const std::vector<u64>
             for (usize i = 0; i < new_rows.size(); ++i) {
                 for (usize k = 0; k < cidxs.size(); ++k)
                     key_vals[k] = new_rows[i][cidxs[k]];
-                auto r = btree.insert(key_vals, first_row_id + i);
+                auto r = btree.insert(key_vals, ur.value().first_row_id + i);
                 if (r.is_err())
                     return Result<u64>::err(r.error().message);
             }
@@ -556,26 +598,40 @@ BTreeIndex* Catalog::btree_index(const std::string& table_name, const std::strin
 }
 
 Result<void> Catalog::bulk_build_index_(BTreeIndex& idx, Table& tbl) {
-    u64 n = tbl.row_count();
-    const auto& deleted = tbl.deleted_bitmap();
     const auto& cidxs = idx.col_indices();
-
     std::vector<std::pair<std::vector<byte>, u64>> entries;
     std::vector<byte> key_buf(idx.key_size());
 
-    for (u64 row_id = 0; row_id < n; ++row_id) {
-        usize byte_idx = row_id / 8;
-        u8 bit = static_cast<u8>(1u << (row_id % 8));
-        if (byte_idx < deleted.size() && (deleted[byte_idx] & bit))
-            continue;
+    for (const auto& seg : tbl.segments()) {
+        const auto& bm = seg.deleted_bitmap();
+        u64 base = seg.meta().base_row_id;
+        u64 count = seg.meta().row_count;
+        for (u64 local = 0; local < count; ++local) {
+            usize byte_idx = local / 8;
+            if (byte_idx < bm.size() && ((bm[byte_idx] >> (local % 8)) & 1u))
+                continue;
+            std::vector<Value> key_vals;
+            key_vals.reserve(cidxs.size());
+            for (u8 ci : cidxs)
+                key_vals.push_back(read_col_value(const_cast<Segment&>(seg).column(ci), local));
+            idx.encode_key(key_vals, key_buf.data());
+            entries.emplace_back(std::vector<byte>(key_buf), base + local);
+        }
+    }
 
+    u64 wb_base = tbl.wb_base_row_id();
+    u64 wb_count = tbl.wb_columns_ref().empty() ? 0 : tbl.wb_columns_ref()[0].row_count();
+    const auto& wb_bm = tbl.wb_deleted_ref();
+    for (u64 local = 0; local < wb_count; ++local) {
+        usize byte_idx = local / 8;
+        if (byte_idx < wb_bm.size() && ((wb_bm[byte_idx] >> (local % 8)) & 1u))
+            continue;
         std::vector<Value> key_vals;
         key_vals.reserve(cidxs.size());
         for (u8 ci : cidxs)
-            key_vals.push_back(read_col_value(tbl.column(ci), row_id));
-
+            key_vals.push_back(read_col_value(const_cast<Table&>(tbl).column(ci), local));
         idx.encode_key(key_vals, key_buf.data());
-        entries.emplace_back(std::vector<byte>(key_buf), row_id);
+        entries.emplace_back(std::vector<byte>(key_buf), wb_base + local);
     }
 
     std::sort(entries.begin(), entries.end(), [&](const auto& a, const auto& b) {

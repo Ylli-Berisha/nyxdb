@@ -5,7 +5,9 @@ add_library(nyxdb_core STATIC
     storage/disk/column_page.cpp
     storage/disk/column_file.cpp
     storage/disk/schema.cpp
+    storage/disk/segment.cpp
     storage/disk/table.cpp
+    storage/merge_worker.cpp
     storage/disk/index_file.cpp
     storage/disk/btree_index.cpp
     storage/disk/constraint_file.cpp

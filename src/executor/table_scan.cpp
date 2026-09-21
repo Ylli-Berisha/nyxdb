@@ -103,134 +103,156 @@ TableScan::TableScan(Table* table, std::vector<size_t> projected, ScanRange rang
     assert(!range_->hi.has_value() || matches_type(*range_->hi, ct));
 }
 
-Result<void> TableScan::open() {
-    total_rows_ = table_->row_count();
+static void refine_survivors_by_deletions(std::vector<std::pair<u64, u64>>& survivors,
+                                          const std::vector<u8>& bm) {
+    std::vector<std::pair<u64, u64>> refined;
+    for (auto [start, end] : survivors) {
+        u64 r = start;
+        while (r < end) {
+            while (r < end) {
+                usize byte_idx = r / 8;
+                if (byte_idx >= bm.size() || !((bm[byte_idx] >> (r % 8)) & 1u))
+                    break;
+                ++r;
+            }
+            if (r >= end)
+                break;
+            u64 s = r;
+            while (r < end) {
+                usize byte_idx = r / 8;
+                if (byte_idx < bm.size() && ((bm[byte_idx] >> (r % 8)) & 1u))
+                    break;
+                ++r;
+            }
+            refined.emplace_back(s, r);
+        }
+    }
+    survivors = std::move(refined);
+}
 
+Result<void> TableScan::build_entry(SegScanState& st) {
     if (range_.has_value()) {
-        auto r = compute_survivors();
+        ColumnFile& range_col =
+            st.seg ? st.seg->column(range_->col_idx) : table_->column(range_->col_idx);
+        TypeId type = range_col.type();
+        u64 cursor = 0;
+        auto rr = range_col.scan([&](const ColumnPage& p) {
+            u16 vc = p.value_count();
+            u64 start = cursor;
+            u64 end = cursor + vc;
+            cursor = end;
+            if (vc == 0)
+                return;
+            if (page_overlaps_range(p, *range_, type)) {
+                if (!st.survivors.empty() && st.survivors.back().second == start)
+                    st.survivors.back().second = end;
+                else
+                    st.survivors.emplace_back(start, end);
+            }
+        });
+        if (rr.is_err())
+            return Result<void>::err(rr.error().message);
+    } else {
+        if (st.local_row_count > 0)
+            st.survivors.emplace_back(0, st.local_row_count);
+    }
+
+    const auto& bm = st.seg ? st.seg->deleted_bitmap() : table_->deleted_bitmap();
+    if (!bm.empty())
+        refine_survivors_by_deletions(st.survivors, bm);
+
+    return Result<void>::ok();
+}
+
+Result<void> TableScan::open() {
+    lock_ = table_->lock_shared();
+    scan_plan_.clear();
+    current_seg_ = 0;
+
+    const auto& segs = table_->segments();
+    scan_plan_.reserve(segs.size() + 1);
+
+    for (usize i = 0; i < segs.size(); ++i) {
+        Segment* seg = const_cast<Segment*>(&segs[i]);
+        SegScanState st;
+        st.seg = seg;
+        st.base_row_id = seg->meta().base_row_id;
+        st.local_row_count = seg->meta().row_count;
+        auto r = build_entry(st);
         if (r.is_err())
             return r;
-        use_survivors_ = true;
+        scan_plan_.push_back(std::move(st));
     }
 
-    if (table_->has_deletions()) {
-        if (!range_.has_value())
-            survivors_.emplace_back(0, total_rows_);
-
-        const auto& bm = table_->deleted_bitmap();
-        std::vector<std::pair<u64, u64>> refined;
-        for (auto [start, end] : survivors_) {
-            u64 r = start;
-            while (r < end) {
-                while (r < end && ((bm[r / 8] >> (r % 8)) & 1u))
-                    ++r;
-                if (r >= end)
-                    break;
-                u64 s = r;
-                while (r < end && !((bm[r / 8] >> (r % 8)) & 1u))
-                    ++r;
-                refined.emplace_back(s, r);
-            }
-        }
-        survivors_ = std::move(refined);
-        use_survivors_ = true;
+    {
+        u64 wb_count =
+            table_->wb_columns_ref().empty() ? 0 : table_->wb_columns_ref()[0].row_count();
+        SegScanState st;
+        st.seg = nullptr;
+        st.base_row_id = table_->wb_base_row_id();
+        st.local_row_count = wb_count;
+        auto r = build_entry(st);
+        if (r.is_err())
+            return r;
+        scan_plan_.push_back(std::move(st));
     }
 
-    cur_range_ = 0;
-    cur_row_ = survivors_.empty() ? 0 : survivors_[0].first;
     opened_ = true;
     return Result<void>::ok();
 }
 
-Result<void> TableScan::compute_survivors() {
-    survivors_.clear();
-    assert(range_.has_value());
-    const ScanRange& r = *range_;
-    ColumnFile& cf = table_->column(r.col_idx);
-    TypeId type = cf.type();
-    u64 cursor = 0;
-
-    auto rr = cf.scan([&](const ColumnPage& p) {
-        u16 vc = p.value_count();
-        u64 start = cursor;
-        u64 end = cursor + vc;
-        cursor = end;
-        if (vc == 0)
-            return;
-        if (page_overlaps_range(p, r, type)) {
-            if (!survivors_.empty() && survivors_.back().second == start)
-                survivors_.back().second = end;
-            else
-                survivors_.push_back({start, end});
-        }
-    });
-    if (rr.is_err())
-        return Result<void>::err(rr.error().message);
-    return Result<void>::ok();
+void TableScan::close() {
+    lock_ = {};
+    opened_ = false;
 }
 
 Result<std::optional<Chunk>> TableScan::next() {
     assert(opened_);
-    if (!use_survivors_)
-        return next_no_range();
-    return next_with_survivors();
-}
 
-Result<std::optional<Chunk>> TableScan::next_no_range() {
-    if (next_row_ >= total_rows_)
-        return Result<std::optional<Chunk>>::ok(std::nullopt);
+    while (current_seg_ < scan_plan_.size()) {
+        SegScanState& st = scan_plan_[current_seg_];
 
-    size_t count = static_cast<size_t>(std::min<u64>(CHUNK_SIZE, total_rows_ - next_row_));
-    auto cols = read_projected_columns(next_row_, count);
-    if (cols.is_err())
-        return Result<std::optional<Chunk>>::err(cols.error().message);
+        while (st.range_idx < st.survivors.size() &&
+               st.cur_local >= st.survivors[st.range_idx].second)
+            ++st.range_idx;
 
-    last_chunk_physical_start_ = next_row_;
-    next_row_ += count;
-    return Result<std::optional<Chunk>>::ok(Chunk(count, std::move(cols.value())));
-}
-
-Result<std::optional<Chunk>> TableScan::next_with_survivors() {
-    while (cur_range_ < survivors_.size()) {
-        auto [start, end] = survivors_[cur_range_];
-        (void)start;
-        if (cur_row_ >= end) {
-            ++cur_range_;
-            if (cur_range_ < survivors_.size())
-                cur_row_ = survivors_[cur_range_].first;
+        if (st.range_idx >= st.survivors.size()) {
+            ++current_seg_;
             continue;
         }
-        u64 remaining_in_range = end - cur_row_;
-        size_t count = static_cast<size_t>(std::min<u64>(CHUNK_SIZE, remaining_in_range));
 
-        auto cols = read_projected_columns(cur_row_, count);
-        if (cols.is_err())
-            return Result<std::optional<Chunk>>::err(cols.error().message);
+        auto [range_start, range_end] = st.survivors[st.range_idx];
+        if (st.cur_local < range_start)
+            st.cur_local = range_start;
 
-        last_chunk_physical_start_ = cur_row_;
-        cur_row_ += count;
-        return Result<std::optional<Chunk>>::ok(Chunk(count, std::move(cols.value())));
+        u64 remaining = range_end - st.cur_local;
+        size_t count = static_cast<size_t>(std::min<u64>(CHUNK_SIZE, remaining));
+
+        u64 local_chunk_start = st.cur_local;
+        last_chunk_physical_start_ = st.base_row_id + local_chunk_start;
+
+        std::vector<ColumnVector> cols;
+        cols.reserve(projected_.size());
+        for (size_t col_idx : projected_) {
+            auto res = read_col(st, col_idx, local_chunk_start, count);
+            if (res.is_err())
+                return Result<std::optional<Chunk>>::err(res.error().message);
+            cols.push_back(std::move(res.value()));
+        }
+
+        st.cur_local += count;
+        return Result<std::optional<Chunk>>::ok(Chunk(count, std::move(cols)));
     }
+
     return Result<std::optional<Chunk>>::ok(std::nullopt);
 }
 
-Result<std::vector<ColumnVector>> TableScan::read_projected_columns(u64 start, size_t count) {
-    std::vector<ColumnVector> cols;
-    cols.reserve(projected_.size());
-    for (size_t col_idx : projected_) {
-        auto res = read_column_range(col_idx, start, count);
-        if (res.is_err())
-            return Result<std::vector<ColumnVector>>::err(res.error().message);
-        cols.push_back(std::move(res.value()));
-    }
-    return Result<std::vector<ColumnVector>>::ok(std::move(cols));
-}
-
-Result<ColumnVector> TableScan::read_column_range(size_t col_idx, u64 start, size_t count) {
-    ColumnFile& cf = table_->column(col_idx);
+Result<ColumnVector> TableScan::read_col(SegScanState& st, size_t col_idx, u64 local_start,
+                                         size_t count) {
+    ColumnFile& cf = st.seg ? st.seg->column(col_idx) : table_->column(col_idx);
     u16 capacity = cf.page_capacity();
     u64 remaining = count;
-    u64 cursor = start;
+    u64 cursor = local_start;
 
     if (cf.type() == TypeId::VARCHAR) {
         ColumnVector out = ColumnVector::empty(TypeId::VARCHAR, cf.nullable(), count);

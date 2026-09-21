@@ -319,6 +319,21 @@ Result<void> WalWriter::log_update(const std::string& table, const std::vector<u
     return write_record(buf);
 }
 
+Result<void> WalWriter::log_segment_flush(const std::string& table, u64 sealed_row_count) {
+    std::vector<u8> buf;
+    buf.push_back(WAL_TYPE_SEGMENT_FLUSH);
+
+    u8 tmp[8];
+    wal_put_u16(tmp, static_cast<u16>(table.size()));
+    buf.insert(buf.end(), tmp, tmp + 2);
+    buf.insert(buf.end(), table.begin(), table.end());
+
+    wal_put_u64(tmp, sealed_row_count);
+    buf.insert(buf.end(), tmp, tmp + 8);
+
+    return write_record(buf);
+}
+
 Result<void> WalWriter::checkpoint() {
     if (fd_ >= 0) {
         ::close(fd_);
