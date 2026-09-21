@@ -47,6 +47,14 @@ class Table {
     Result<void> mark_deleted(const std::vector<u64>& row_indices);
     Result<void> clear_deletions();
 
+    struct UpdateMeta {
+        u64 first_row_id;
+        u64 wb_base_before;
+        u64 wb_base_after;
+    };
+    Result<UpdateMeta> update_rows(const std::vector<u64>& old_indices,
+                                   const std::vector<std::vector<Value>>& new_rows);
+
     const std::vector<Segment>& segments() const { return segments_; }
     u64 wb_base_row_id() const { return wb_base_row_id_; }
     const std::vector<ColumnFile>& wb_columns_ref() const { return wb_columns_; }
@@ -66,6 +74,8 @@ class Table {
 
     Result<void> maybe_flush_();
     Result<void> flush_write_buffer_();
+    Result<void> mark_deleted_nolock_(const std::vector<u64>& row_indices);
+    Result<u64> insert_many_nolock_(const std::vector<std::vector<Value>>& rows);
 
     std::string dir_;
     std::string name_;

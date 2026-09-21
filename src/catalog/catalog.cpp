@@ -473,19 +473,12 @@ Result<u64> Catalog::update_rows(const std::string& name, const std::vector<u64>
     if (lw.is_err())
         return Result<u64>::err(lw.error().message);
 
-    auto dr = it->second.mark_deleted(old_indices);
-    if (dr.is_err())
-        return Result<u64>::err(dr.error().message);
+    auto ur = it->second.update_rows(old_indices, new_rows);
+    if (ur.is_err())
+        return Result<u64>::err(ur.error().message);
 
-    u64 first_row_id = it->second.row_count();
-    u64 wb_base_before_upd = it->second.wb_base_row_id();
-    auto ir = it->second.insert_many(new_rows);
-    if (ir.is_err())
-        return Result<u64>::err(ir.error().message);
-
-    u64 wb_base_after_upd = it->second.wb_base_row_id();
-    if (wb_base_after_upd > wb_base_before_upd) {
-        auto sf = wal_->log_segment_flush(canonical, wb_base_after_upd);
+    if (ur.value().wb_base_after > ur.value().wb_base_before) {
+        auto sf = wal_->log_segment_flush(canonical, ur.value().wb_base_after);
         if (sf.is_err())
             return Result<u64>::err(sf.error().message);
     }
@@ -498,7 +491,7 @@ Result<u64> Catalog::update_rows(const std::string& name, const std::vector<u64>
             for (usize i = 0; i < new_rows.size(); ++i) {
                 for (usize k = 0; k < cidxs.size(); ++k)
                     key_vals[k] = new_rows[i][cidxs[k]];
-                auto r = btree.insert(key_vals, first_row_id + i);
+                auto r = btree.insert(key_vals, ur.value().first_row_id + i);
                 if (r.is_err())
                     return Result<u64>::err(r.error().message);
             }

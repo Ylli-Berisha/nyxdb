@@ -339,9 +339,7 @@ Result<u64> Table::insert(const std::vector<Value>& row) {
     return Result<u64>::ok(row_id);
 }
 
-Result<u64> Table::insert_many(const std::vector<std::vector<Value>>& rows) {
-    std::unique_lock lk(*rwlock_);
-
+Result<u64> Table::insert_many_nolock_(const std::vector<std::vector<Value>>& rows) {
     if (rows.empty())
         return Result<u64>::ok(0);
 
@@ -373,9 +371,30 @@ Result<u64> Table::insert_many(const std::vector<std::vector<Value>>& rows) {
     return Result<u64>::ok(static_cast<u64>(rows.size()));
 }
 
-Result<void> Table::mark_deleted(const std::vector<u64>& row_indices) {
+Result<u64> Table::insert_many(const std::vector<std::vector<Value>>& rows) {
+    std::unique_lock lk(*rwlock_);
+    return insert_many_nolock_(rows);
+}
+
+Result<Table::UpdateMeta> Table::update_rows(const std::vector<u64>& old_indices,
+                                             const std::vector<std::vector<Value>>& new_rows) {
     std::unique_lock lk(*rwlock_);
 
+    auto dr = mark_deleted_nolock_(old_indices);
+    if (dr.is_err())
+        return Result<UpdateMeta>::err(dr.error().message);
+
+    u64 first_row_id = wb_base_row_id_ + (wb_columns_.empty() ? 0 : wb_columns_[0].row_count());
+    u64 wb_base_before = wb_base_row_id_;
+
+    auto ir = insert_many_nolock_(new_rows);
+    if (ir.is_err())
+        return Result<UpdateMeta>::err(ir.error().message);
+
+    return Result<UpdateMeta>::ok({first_row_id, wb_base_before, wb_base_row_id_});
+}
+
+Result<void> Table::mark_deleted_nolock_(const std::vector<u64>& row_indices) {
     if (row_indices.empty())
         return Result<void>::ok();
 
@@ -422,6 +441,11 @@ Result<void> Table::mark_deleted(const std::vector<u64>& row_indices) {
     }
 
     return Result<void>::ok();
+}
+
+Result<void> Table::mark_deleted(const std::vector<u64>& row_indices) {
+    std::unique_lock lk(*rwlock_);
+    return mark_deleted_nolock_(row_indices);
 }
 
 Result<void> Table::clear_deletions() {
