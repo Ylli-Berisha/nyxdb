@@ -12,6 +12,7 @@ static constexpr u8 WAL_TYPE_INSERT = 0x01;
 static constexpr u8 WAL_TYPE_CREATE = 0x02;
 static constexpr u8 WAL_TYPE_DELETE = 0x03;
 static constexpr u8 WAL_TYPE_UPDATE = 0x04;
+static constexpr u8 WAL_TYPE_SEGMENT_FLUSH = 0x05;
 static constexpr usize WAL_HEADER_SIZE = 6; // magic(4) + version(2)
 static constexpr u64 WAL_CHECKPOINT_BYTES = 64ULL * 1024 * 1024; // 64 MB
 

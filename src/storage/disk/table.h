@@ -17,7 +17,7 @@ namespace nyx {
 class Table {
   public:
     static Result<Table> create(const std::string& data_root, const std::string& name,
-                                Schema schema);
+                                Schema schema, u64 flush_threshold = FLUSH_THRESHOLD);
     static Result<Table> open(const std::string& data_root, const std::string& name);
 
     ~Table() = default;
@@ -57,12 +57,12 @@ class Table {
     }
 
     Result<void> replace_segments(const std::vector<usize>& indices, const std::string& tmp_dir,
-                                   u64 merged_base_row_id, u64 merged_row_count);
+                                  u64 merged_base_row_id, u64 merged_row_count);
 
   private:
     Table(std::string dir, std::string name, Schema schema, std::vector<ColumnFile> wb_columns,
           std::vector<u8> wb_deleted, u64 wb_base_row_id, std::vector<Segment> segments,
-          u64 next_segment_id);
+          u64 next_segment_id, u64 flush_threshold = FLUSH_THRESHOLD);
 
     Result<void> maybe_flush_();
     Result<void> flush_write_buffer_();
@@ -75,6 +75,7 @@ class Table {
     u64 wb_base_row_id_ = 0;
     std::vector<Segment> segments_;
     u64 next_segment_id_ = 0;
+    u64 flush_threshold_;
     mutable std::unique_ptr<std::shared_mutex> rwlock_;
 
     static constexpr u64 FLUSH_THRESHOLD = 65536;

@@ -14,10 +14,6 @@ namespace nyx {
 
 namespace fs = std::filesystem;
 
-// ---------------------------------------------------------------------------
-// deleted.bin helpers (write buffer)
-// ---------------------------------------------------------------------------
-
 static std::string wb_deleted_path(const std::string& dir) {
     return dir + "/deleted.bin";
 }
@@ -26,7 +22,7 @@ static std::vector<u8> load_wb_deleted(const std::string& dir) {
     int fd = ::open(wb_deleted_path(dir).c_str(), O_RDONLY);
     if (fd < 0)
         return {};
-    struct stat st{};
+    struct stat st {};
     ::fstat(fd, &st);
     std::vector<u8> bm(static_cast<size_t>(st.st_size));
     if (!bm.empty()) {
@@ -55,11 +51,6 @@ static Result<void> write_wb_deleted(const std::string& dir, const std::vector<u
     return Result<void>::ok();
 }
 
-// ---------------------------------------------------------------------------
-// manifest.bin helpers
-// ---------------------------------------------------------------------------
-// Format: [u32 version=1][u32 count][count × {u64 id, u64 base_row_id, u64 row_count}]
-
 static std::string manifest_path(const std::string& dir) {
     return dir + "/manifest.bin";
 }
@@ -69,11 +60,11 @@ static std::string manifest_tmp_path(const std::string& dir) {
 }
 
 static constexpr u32 MANIFEST_VERSION = 1;
-static constexpr usize MANIFEST_ENTRY_SIZE = 24; // 3 × u64
+static constexpr usize MANIFEST_ENTRY_SIZE = 24;
 
 static u32 read_u32_le(const u8* p) {
-    return static_cast<u32>(p[0]) | (static_cast<u32>(p[1]) << 8) |
-           (static_cast<u32>(p[2]) << 16) | (static_cast<u32>(p[3]) << 24);
+    return static_cast<u32>(p[0]) | (static_cast<u32>(p[1]) << 8) | (static_cast<u32>(p[2]) << 16) |
+           (static_cast<u32>(p[3]) << 24);
 }
 
 static u64 read_u64_le(const u8* p) {
@@ -98,7 +89,7 @@ static std::vector<SegmentMeta> read_manifest(const std::string& dir) {
     int fd = ::open(path.c_str(), O_RDONLY);
     if (fd < 0)
         return {};
-    struct stat st{};
+    struct stat st {};
     ::fstat(fd, &st);
     if (st.st_size < 8) {
         ::close(fd);
@@ -128,8 +119,7 @@ static std::vector<SegmentMeta> read_manifest(const std::string& dir) {
     return metas;
 }
 
-static Result<void> write_manifest(const std::string& dir,
-                                   const std::vector<SegmentMeta>& metas) {
+static Result<void> write_manifest(const std::string& dir, const std::vector<SegmentMeta>& metas) {
     usize buf_size = 8 + metas.size() * MANIFEST_ENTRY_SIZE;
     std::vector<u8> buf(buf_size, 0);
     write_u32_le(buf.data(), MANIFEST_VERSION);
@@ -156,10 +146,6 @@ static Result<void> write_manifest(const std::string& dir,
     return Result<void>::ok();
 }
 
-// ---------------------------------------------------------------------------
-// meta.bin per segment
-// ---------------------------------------------------------------------------
-
 static Result<void> write_seg_meta(const std::string& seg_dir, const SegmentMeta& m) {
     std::string path = seg_dir + "/meta.bin";
     u8 buf[24];
@@ -177,17 +163,14 @@ static Result<void> write_seg_meta(const std::string& seg_dir, const SegmentMeta
     return Result<void>::ok();
 }
 
-// ---------------------------------------------------------------------------
-// Table implementation
-// ---------------------------------------------------------------------------
-
 Table::Table(std::string dir, std::string name, Schema schema, std::vector<ColumnFile> wb_columns,
              std::vector<u8> wb_deleted, u64 wb_base_row_id, std::vector<Segment> segments,
-             u64 next_segment_id)
+             u64 next_segment_id, u64 flush_threshold)
     : dir_(std::move(dir)), name_(std::move(name)), schema_(std::move(schema)),
       wb_columns_(std::move(wb_columns)), wb_deleted_(std::move(wb_deleted)),
       wb_base_row_id_(wb_base_row_id), segments_(std::move(segments)),
-      next_segment_id_(next_segment_id), rwlock_(std::make_unique<std::shared_mutex>()) {}
+      next_segment_id_(next_segment_id), flush_threshold_(flush_threshold),
+      rwlock_(std::make_unique<std::shared_mutex>()) {}
 
 static Result<void> validate_schema(const Schema& schema) {
     if (schema.empty())
@@ -205,7 +188,8 @@ static Result<void> validate_schema(const Schema& schema) {
     return Result<void>::ok();
 }
 
-Result<Table> Table::create(const std::string& data_root, const std::string& name, Schema schema) {
+Result<Table> Table::create(const std::string& data_root, const std::string& name, Schema schema,
+                            u64 flush_threshold) {
     auto v = validate_schema(schema);
     if (v.is_err())
         return Result<Table>::err("create: " + v.error().message);
@@ -242,8 +226,8 @@ Result<Table> Table::create(const std::string& data_root, const std::string& nam
         columns.push_back(std::move(cf_res.value()));
     }
 
-    return Result<Table>::ok(
-        Table(dir_path.string(), name, std::move(schema), std::move(columns), {}, 0, {}, 0));
+    return Result<Table>::ok(Table(dir_path.string(), name, std::move(schema), std::move(columns),
+                                   {}, 0, {}, 0, flush_threshold));
 }
 
 Result<Table> Table::open(const std::string& data_root, const std::string& name) {
@@ -258,7 +242,6 @@ Result<Table> Table::open(const std::string& data_root, const std::string& name)
 
     Schema schema = std::move(schema_res.value());
 
-    // Load sealed segments from manifest
     std::vector<SegmentMeta> metas = read_manifest(dir_path.string());
     std::vector<Segment> segments;
     segments.reserve(metas.size());
@@ -277,7 +260,6 @@ Result<Table> Table::open(const std::string& data_root, const std::string& name)
         segments.push_back(std::move(seg_r.value()));
     }
 
-    // Open write buffer columns
     std::vector<ColumnFile> wb_columns;
     wb_columns.reserve(schema.size());
     for (const auto& col : schema) {
@@ -397,7 +379,6 @@ Result<void> Table::mark_deleted(const std::vector<u64>& row_indices) {
     if (row_indices.empty())
         return Result<void>::ok();
 
-    // Route each global row ID to the correct segment or write buffer
     std::vector<u64> wb_ids;
     std::vector<std::vector<u64>> seg_ids(segments_.size());
 
@@ -405,7 +386,6 @@ Result<void> Table::mark_deleted(const std::vector<u64>& row_indices) {
         if (gid >= wb_base_row_id_) {
             wb_ids.push_back(gid - wb_base_row_id_);
         } else if (!segments_.empty()) {
-            // Binary search segments by base_row_id range
             usize lo = 0, hi = segments_.size();
             while (lo + 1 < hi) {
                 usize mid = (lo + hi) / 2;
@@ -483,7 +463,7 @@ Result<void> Table::fsync() {
 
 Result<void> Table::maybe_flush_() {
     u64 wb_row_count = wb_columns_.empty() ? 0 : wb_columns_[0].row_count();
-    if (wb_row_count >= FLUSH_THRESHOLD)
+    if (wb_row_count >= flush_threshold_)
         return flush_write_buffer_();
     return Result<void>::ok();
 }
@@ -493,7 +473,6 @@ Result<void> Table::flush_write_buffer_() {
     if (wb_row_count == 0)
         return Result<void>::ok();
 
-    // Flush write buffer to disk before renaming
     for (auto& col : wb_columns_) {
         auto r = col.flush();
         if (r.is_err())
@@ -508,7 +487,6 @@ Result<void> Table::flush_write_buffer_() {
     if (ec)
         return Result<void>::err("flush_write_buffer: mkdir " + seg_dir + ": " + ec.message());
 
-    // Rename each write buffer column file into the segment directory
     for (const auto& col : schema_) {
         std::string src = dir_ + "/" + col.name + ".col";
         std::string dst = seg_dir + "/" + col.name + ".col";
@@ -517,7 +495,6 @@ Result<void> Table::flush_write_buffer_() {
                                      std::string(strerror(errno)));
     }
 
-    // Move write buffer deleted.bin into segment if it exists
     {
         std::string src = wb_deleted_path(dir_);
         std::string dst = seg_dir + "/deleted.bin";
@@ -528,37 +505,32 @@ Result<void> Table::flush_write_buffer_() {
         }
     }
 
-    // Write segment meta.bin
     SegmentMeta meta{seg_id, wb_base_row_id_, wb_row_count};
     auto mr = write_seg_meta(seg_dir, meta);
     if (mr.is_err())
         return mr;
 
-    // Open the just-sealed segment
     auto seg_r = Segment::open(seg_dir, schema_, meta);
     if (seg_r.is_err())
         return Result<void>::err("flush_write_buffer: open new segment: " + seg_r.error().message);
 
-    // Create fresh write buffer ColumnFiles in place
     std::vector<ColumnFile> new_wb;
     new_wb.reserve(schema_.size());
     for (const auto& col : schema_) {
         std::string col_path = dir_ + "/" + col.name + ".col";
         auto cf_r = ColumnFile::create(col_path, col.type, col.nullable, col.max_len);
         if (cf_r.is_err())
-            return Result<void>::err("flush_write_buffer: create new col '" + col.name + "': " +
-                                     cf_r.error().message);
+            return Result<void>::err("flush_write_buffer: create new col '" + col.name +
+                                     "': " + cf_r.error().message);
         new_wb.push_back(std::move(cf_r.value()));
     }
 
-    // Commit in memory
     wb_base_row_id_ += wb_row_count;
     wb_deleted_.clear();
     wb_columns_ = std::move(new_wb);
     segments_.push_back(std::move(seg_r.value()));
     ++next_segment_id_;
 
-    // Collect metas and write manifest atomically
     std::vector<SegmentMeta> all_metas;
     all_metas.reserve(segments_.size());
     for (const auto& s : segments_)
@@ -568,7 +540,7 @@ Result<void> Table::flush_write_buffer_() {
 }
 
 Result<void> Table::replace_segments(const std::vector<usize>& indices, const std::string& tmp_dir,
-                                      u64 merged_base_row_id, u64 merged_row_count) {
+                                     u64 merged_base_row_id, u64 merged_row_count) {
     std::unique_lock lk(*rwlock_);
 
     u64 new_id = next_segment_id_++;

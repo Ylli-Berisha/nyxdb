@@ -39,7 +39,7 @@ class TableScan : public Operator {
 
   private:
     struct SegScanState {
-        Segment* seg;     // null = write buffer
+        Segment* seg; // null = write buffer
         u64 base_row_id;
         u64 local_row_count;
         std::vector<std::pair<u64, u64>> survivors; // local row ID ranges

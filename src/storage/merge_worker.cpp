@@ -20,7 +20,9 @@ namespace fs = std::filesystem;
 MergeWorker::MergeWorker(Catalog* catalog, u32 merge_threshold)
     : catalog_(catalog), merge_threshold_(merge_threshold) {}
 
-MergeWorker::~MergeWorker() { stop(); }
+MergeWorker::~MergeWorker() {
+    stop();
+}
 
 void MergeWorker::start() {
     stop_flag_.store(false, std::memory_order_relaxed);
@@ -171,7 +173,7 @@ void MergeWorker::maybe_merge_table_(const std::string& table_name) {
         for (usize i = 0; i < n; ++i) {
             const Segment& s = segs[i];
             snaps.push_back({s.dir(), s.meta().id, s.meta().base_row_id, s.meta().row_count,
-                              s.deleted_bitmap(), i});
+                             s.deleted_bitmap(), i});
         }
     }
 
@@ -187,8 +189,8 @@ void MergeWorker::maybe_merge_table_(const std::string& table_name) {
         const auto& col_schema = schema[ci];
         std::string dst_path = tmp_dir + "/" + col_schema.name + ".col";
 
-        auto dst_r = ColumnFile::create(dst_path, col_schema.type, col_schema.nullable,
-                                         col_schema.max_len);
+        auto dst_r =
+            ColumnFile::create(dst_path, col_schema.type, col_schema.nullable, col_schema.max_len);
         if (dst_r.is_err()) {
             fs::remove_all(tmp_dir, ec);
             return;

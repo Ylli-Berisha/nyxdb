@@ -13,7 +13,7 @@ static std::vector<u8> seg_load_deleted(const std::string& dir) {
     int fd = ::open(path.c_str(), O_RDONLY);
     if (fd < 0)
         return {};
-    struct stat st{};
+    struct stat st {};
     ::fstat(fd, &st);
     std::vector<u8> bm(static_cast<usize>(st.st_size));
     if (!bm.empty()) {
@@ -47,16 +47,15 @@ Segment::Segment(std::string dir, SegmentMeta meta, std::vector<ColumnFile> colu
     : dir_(std::move(dir)), meta_(meta), columns_(std::move(columns)),
       deleted_(std::move(deleted)) {}
 
-Result<Segment> Segment::open(const std::string& seg_dir, const Schema& schema,
-                               SegmentMeta meta) {
+Result<Segment> Segment::open(const std::string& seg_dir, const Schema& schema, SegmentMeta meta) {
     std::vector<ColumnFile> columns;
     columns.reserve(schema.size());
     for (const auto& col : schema) {
         std::string col_path = seg_dir + "/" + col.name + ".col";
         auto cf_r = ColumnFile::open(col_path);
         if (cf_r.is_err())
-            return Result<Segment>::err("segment open col '" + col.name + "': " +
-                                        cf_r.error().message);
+            return Result<Segment>::err("segment open col '" + col.name +
+                                        "': " + cf_r.error().message);
         columns.push_back(std::move(cf_r.value()));
     }
     auto deleted = seg_load_deleted(seg_dir);

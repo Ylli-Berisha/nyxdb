@@ -18,8 +18,7 @@ struct SegmentMeta {
 
 class Segment {
   public:
-    static Result<Segment> open(const std::string& seg_dir, const Schema& schema,
-                                SegmentMeta meta);
+    static Result<Segment> open(const std::string& seg_dir, const Schema& schema, SegmentMeta meta);
 
     const SegmentMeta& meta() const { return meta_; }
     const std::string& dir() const { return dir_; }

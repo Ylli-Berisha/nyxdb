@@ -104,7 +104,7 @@ TableScan::TableScan(Table* table, std::vector<size_t> projected, ScanRange rang
 }
 
 static void refine_survivors_by_deletions(std::vector<std::pair<u64, u64>>& survivors,
-                                           const std::vector<u8>& bm) {
+                                          const std::vector<u8>& bm) {
     std::vector<std::pair<u64, u64>> refined;
     for (auto [start, end] : survivors) {
         u64 r = start;
@@ -132,8 +132,8 @@ static void refine_survivors_by_deletions(std::vector<std::pair<u64, u64>>& surv
 
 Result<void> TableScan::build_entry(SegScanState& st) {
     if (range_.has_value()) {
-        ColumnFile& range_col = st.seg ? st.seg->column(range_->col_idx)
-                                       : table_->column(range_->col_idx);
+        ColumnFile& range_col =
+            st.seg ? st.seg->column(range_->col_idx) : table_->column(range_->col_idx);
         TypeId type = range_col.type();
         u64 cursor = 0;
         auto rr = range_col.scan([&](const ColumnPage& p) {
@@ -184,11 +184,9 @@ Result<void> TableScan::open() {
         scan_plan_.push_back(std::move(st));
     }
 
-    // Write buffer entry
     {
-        u64 wb_count = table_->wb_columns_ref().empty()
-                           ? 0
-                           : table_->wb_columns_ref()[0].row_count();
+        u64 wb_count =
+            table_->wb_columns_ref().empty() ? 0 : table_->wb_columns_ref()[0].row_count();
         SegScanState st;
         st.seg = nullptr;
         st.base_row_id = table_->wb_base_row_id();
@@ -214,7 +212,6 @@ Result<std::optional<Chunk>> TableScan::next() {
     while (current_seg_ < scan_plan_.size()) {
         SegScanState& st = scan_plan_[current_seg_];
 
-        // Advance past exhausted survivor ranges.
         while (st.range_idx < st.survivors.size() &&
                st.cur_local >= st.survivors[st.range_idx].second)
             ++st.range_idx;
@@ -251,7 +248,7 @@ Result<std::optional<Chunk>> TableScan::next() {
 }
 
 Result<ColumnVector> TableScan::read_col(SegScanState& st, size_t col_idx, u64 local_start,
-                                          size_t count) {
+                                         size_t count) {
     ColumnFile& cf = st.seg ? st.seg->column(col_idx) : table_->column(col_idx);
     u16 capacity = cf.page_capacity();
     u64 remaining = count;

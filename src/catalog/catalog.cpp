@@ -213,16 +213,33 @@ Result<Catalog> Catalog::load(const std::string& data_root) {
     }
 
     std::unordered_map<std::string, LsnCheckpoint> lsns;
+    for (auto& [name, tbl] : cat.tables_)
+        lsns[name] = read_lsn(tbl.dir());
+
+    for (const auto& rec : records) {
+        if (rec.type != WalRecord::Type::SegmentFlush)
+            continue;
+        std::string canonical = canonicalize(rec.table_name);
+        auto it = lsns.find(canonical);
+        if (it == lsns.end())
+            continue;
+        if (rec.byte_offset > it->second.lsn) {
+            it->second.lsn = rec.byte_offset;
+            it->second.rows = rec.sealed_row_count;
+        }
+    }
+
     for (auto& [name, tbl] : cat.tables_) {
-        LsnCheckpoint cp = read_lsn(tbl.dir());
-        lsns[name] = cp;
-        auto tr = tbl.truncate(cp.rows);
+        auto it = lsns.find(name);
+        if (it == lsns.end())
+            continue;
+        auto tr = tbl.truncate(it->second.rows);
         if (tr.is_err())
             return Result<Catalog>::err("catalog: truncate '" + name + "': " + tr.error().message);
     }
 
     for (const auto& rec : records) {
-        if (rec.type == WalRecord::Type::CreateTable)
+        if (rec.type == WalRecord::Type::CreateTable || rec.type == WalRecord::Type::SegmentFlush)
             continue;
         std::string canonical = canonicalize(rec.table_name);
         auto it = cat.tables_.find(canonical);
@@ -380,9 +397,17 @@ Result<u64> Catalog::insert(const std::string& table_name,
     }
 
     u64 first_row_id = it->second.row_count();
+    u64 wb_base_before = it->second.wb_base_row_id();
     auto ir = it->second.insert_many(rows);
     if (ir.is_err())
         return ir;
+
+    u64 wb_base_after = it->second.wb_base_row_id();
+    if (wb_base_after > wb_base_before) {
+        auto sf = wal_->log_segment_flush(canonical, wb_base_after);
+        if (sf.is_err())
+            return Result<u64>::err(sf.error().message);
+    }
 
     if (idx_it != indexes_.end()) {
         for (auto& btree : idx_it->second) {
@@ -453,9 +478,17 @@ Result<u64> Catalog::update_rows(const std::string& name, const std::vector<u64>
         return Result<u64>::err(dr.error().message);
 
     u64 first_row_id = it->second.row_count();
+    u64 wb_base_before_upd = it->second.wb_base_row_id();
     auto ir = it->second.insert_many(new_rows);
     if (ir.is_err())
         return Result<u64>::err(ir.error().message);
+
+    u64 wb_base_after_upd = it->second.wb_base_row_id();
+    if (wb_base_after_upd > wb_base_before_upd) {
+        auto sf = wal_->log_segment_flush(canonical, wb_base_after_upd);
+        if (sf.is_err())
+            return Result<u64>::err(sf.error().message);
+    }
 
     auto idx_it = indexes_.find(canonical);
     if (idx_it != indexes_.end()) {
