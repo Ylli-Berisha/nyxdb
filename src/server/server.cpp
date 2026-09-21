@@ -1,0 +1,198 @@
+#include "server/server.h"
+
+#include "server/session.h"
+
+#include <cstdlib>
+#include <cstring>
+#include <glob.h>
+
+namespace nyx::server {
+
+static const QUIC_REGISTRATION_CONFIG reg_config = {"nyxdb", QUIC_EXECUTION_PROFILE_LOW_LATENCY};
+static const QUIC_BUFFER alpn = {5, (uint8_t*)"nyxdb"};
+
+struct ConnectionCtx {
+    Database* db;
+    const std::string* token;
+    const QUIC_API_TABLE* api;
+    Session* session = nullptr;
+};
+
+Result<Server> Server::create(const std::string& data_dir, u16 port, const std::string& token) {
+    Server s;
+    s.token_ = token;
+    s.port_ = port;
+
+    if (QUIC_FAILED(MsQuicOpen2(&s.api_)))
+        return Result<Server>::err("MsQuicOpen2 failed");
+
+    if (QUIC_FAILED(s.api_->RegistrationOpen(&reg_config, &s.registration_)))
+        return Result<Server>::err("RegistrationOpen failed");
+
+    QUIC_SETTINGS settings{};
+    settings.IdleTimeoutMs = 30000;
+    settings.IsSet.IdleTimeoutMs = 1;
+    settings.PeerBidiStreamCount = 1;
+    settings.IsSet.PeerBidiStreamCount = 1;
+
+    if (QUIC_FAILED(s.api_->ConfigurationOpen(s.registration_, &alpn, 1, &settings,
+                                              sizeof(settings), nullptr, &s.configuration_)))
+        return Result<Server>::err("ConfigurationOpen failed");
+
+    glob_t g{};
+    std::string cert_path, key_path;
+    if (glob("/tmp/quictest.*/localhost_ss_cert.pem", 0, nullptr, &g) == 0 && g.gl_pathc > 0) {
+        cert_path = g.gl_pathv[0];
+        key_path = cert_path.substr(0, cert_path.rfind('/') + 1) + "localhost_ss_key.pem";
+        globfree(&g);
+    } else {
+        globfree(&g);
+        cert_path = "/tmp/nyxdb-server-cert.pem";
+        key_path = "/tmp/nyxdb-server-key.pem";
+        int rc = std::system("openssl req -x509 -newkey rsa:2048 -sha256 -days 3650 -nodes "
+                             "-keyout /tmp/nyxdb-server-key.pem "
+                             "-out /tmp/nyxdb-server-cert.pem "
+                             "-subj \"/CN=nyxdb\" 2>/dev/null");
+        if (rc != 0)
+            return Result<Server>::err("failed to generate TLS cert (openssl not found?)");
+    }
+
+    QUIC_CERTIFICATE_FILE cert_file;
+    cert_file.CertificateFile = cert_path.c_str();
+    cert_file.PrivateKeyFile = key_path.c_str();
+
+    QUIC_CREDENTIAL_CONFIG server_cred{};
+    server_cred.Type = QUIC_CREDENTIAL_TYPE_CERTIFICATE_FILE;
+    server_cred.CertificateFile = &cert_file;
+    server_cred.Flags = QUIC_CREDENTIAL_FLAG_NONE;
+
+    if (QUIC_FAILED(s.api_->ConfigurationLoadCredential(s.configuration_, &server_cred)))
+        return Result<Server>::err("ConfigurationLoadCredential failed");
+
+    auto db_r = Database::open(data_dir);
+    if (!db_r.is_ok())
+        return Result<Server>::err("Database::open: " + db_r.error().message);
+    s.db_ = std::make_unique<Database>(std::move(db_r.value()));
+
+    return Result<Server>::ok(std::move(s));
+}
+
+Result<void> Server::start() {
+    if (QUIC_FAILED(api_->ListenerOpen(registration_, listener_cb_, this, &listener_)))
+        return Result<void>::err("ListenerOpen failed");
+
+    QUIC_ADDR addr{};
+    QuicAddrSetFamily(&addr, QUIC_ADDRESS_FAMILY_UNSPEC);
+    QuicAddrSetPort(&addr, port_);
+
+    if (QUIC_FAILED(api_->ListenerStart(listener_, &alpn, 1, &addr)))
+        return Result<void>::err("ListenerStart failed");
+
+    return Result<void>::ok();
+}
+
+Result<void> Server::run() {
+    auto r = start();
+    if (!r.is_ok())
+        return r;
+
+    for (;;)
+        sleep(1);
+
+    return Result<void>::ok();
+}
+
+Server::~Server() {
+    if (listener_)
+        api_->ListenerClose(listener_);
+    if (configuration_)
+        api_->ConfigurationClose(configuration_);
+    if (registration_)
+        api_->RegistrationClose(registration_);
+    if (api_)
+        MsQuicClose(api_);
+}
+
+Server::Server(Server&& o) noexcept
+    : api_(o.api_), registration_(o.registration_), configuration_(o.configuration_),
+      listener_(o.listener_), db_(std::move(o.db_)), token_(std::move(o.token_)), port_(o.port_) {
+    o.api_ = nullptr;
+    o.registration_ = nullptr;
+    o.configuration_ = nullptr;
+    o.listener_ = nullptr;
+}
+
+Server& Server::operator=(Server&& o) noexcept {
+    if (this != &o) {
+        this->~Server();
+        new (this) Server(std::move(o));
+    }
+    return *this;
+}
+
+QUIC_STATUS QUIC_API Server::listener_cb_(HQUIC, void* ctx, QUIC_LISTENER_EVENT* ev) {
+    auto* self = static_cast<Server*>(ctx);
+    if (ev->Type == QUIC_LISTENER_EVENT_NEW_CONNECTION) {
+        HQUIC conn = ev->NEW_CONNECTION.Connection;
+
+        auto* cctx = new ConnectionCtx;
+        cctx->db = self->db_.get();
+        cctx->token = &self->token_;
+        cctx->api = self->api_;
+
+        self->api_->SetCallbackHandler(conn, (void*)connection_cb_, cctx);
+        self->api_->ConnectionSetConfiguration(conn, self->configuration_);
+        return QUIC_STATUS_SUCCESS;
+    }
+    return QUIC_STATUS_NOT_SUPPORTED;
+}
+
+QUIC_STATUS QUIC_API Server::connection_cb_(HQUIC conn, void* ctx, QUIC_CONNECTION_EVENT* ev) {
+    auto* cctx = static_cast<ConnectionCtx*>(ctx);
+    switch (ev->Type) {
+    case QUIC_CONNECTION_EVENT_CONNECTED:
+        break;
+    case QUIC_CONNECTION_EVENT_PEER_STREAM_STARTED: {
+        HQUIC stream = ev->PEER_STREAM_STARTED.Stream;
+        cctx->session = new Session(cctx->db, *cctx->token, conn, cctx->api);
+        cctx->session->on_stream(stream);
+        cctx->api->SetCallbackHandler(stream, (void*)stream_cb_, cctx);
+        break;
+    }
+    case QUIC_CONNECTION_EVENT_SHUTDOWN_COMPLETE:
+        cctx->api->ConnectionClose(conn);
+        delete cctx->session;
+        delete cctx;
+        break;
+    default:
+        break;
+    }
+    return QUIC_STATUS_SUCCESS;
+}
+
+QUIC_STATUS QUIC_API Server::stream_cb_(HQUIC stream, void* ctx, QUIC_STREAM_EVENT* ev) {
+    auto* cctx = static_cast<ConnectionCtx*>(ctx);
+    switch (ev->Type) {
+    case QUIC_STREAM_EVENT_RECEIVE:
+        for (u32 i = 0; i < ev->RECEIVE.BufferCount; ++i) {
+            cctx->session->on_data(reinterpret_cast<const byte*>(ev->RECEIVE.Buffers[i].Buffer),
+                                   ev->RECEIVE.Buffers[i].Length);
+        }
+        break;
+    case QUIC_STREAM_EVENT_SEND_COMPLETE: {
+        auto* qbuf = static_cast<QUIC_BUFFER*>(ev->SEND_COMPLETE.ClientContext);
+        delete[] qbuf->Buffer;
+        delete qbuf;
+        break;
+    }
+    case QUIC_STREAM_EVENT_SHUTDOWN_COMPLETE:
+        if (!ev->SHUTDOWN_COMPLETE.AppCloseInProgress)
+            cctx->api->StreamClose(stream);
+        break;
+    default:
+        break;
+    }
+    return QUIC_STATUS_SUCCESS;
+}
+
+} // namespace nyx::server
