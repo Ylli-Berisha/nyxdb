@@ -567,4 +567,40 @@ Result<void> Table::flush_write_buffer_() {
     return write_manifest(dir_, all_metas);
 }
 
+Result<void> Table::replace_segments(const std::vector<usize>& indices, const std::string& tmp_dir,
+                                      u64 merged_base_row_id, u64 merged_row_count) {
+    std::unique_lock lk(*rwlock_);
+
+    u64 new_id = next_segment_id_++;
+    std::string final_dir = dir_ + "/seg_" + std::to_string(new_id);
+
+    if (::rename(tmp_dir.c_str(), final_dir.c_str()) != 0)
+        return Result<void>::err("replace_segments: rename: " + std::string(strerror(errno)));
+
+    SegmentMeta new_meta{new_id, merged_base_row_id, merged_row_count};
+    auto mr = write_seg_meta(final_dir, new_meta);
+    if (mr.is_err())
+        return mr;
+
+    auto seg_r = Segment::open(final_dir, schema_, new_meta);
+    if (seg_r.is_err())
+        return Result<void>::err("replace_segments: " + seg_r.error().message);
+
+    std::vector<usize> sorted = indices;
+    std::sort(sorted.rbegin(), sorted.rend());
+    for (usize idx : sorted)
+        segments_.erase(segments_.begin() + static_cast<std::ptrdiff_t>(idx));
+
+    usize insert_pos = sorted.back();
+    segments_.insert(segments_.begin() + static_cast<std::ptrdiff_t>(insert_pos),
+                     std::move(seg_r.value()));
+
+    std::vector<SegmentMeta> all_metas;
+    all_metas.reserve(segments_.size());
+    for (const auto& s : segments_)
+        all_metas.push_back(s.meta());
+
+    return write_manifest(dir_, all_metas);
+}
+
 } // namespace nyx

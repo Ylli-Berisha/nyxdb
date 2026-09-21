@@ -289,6 +289,15 @@ Table* Catalog::table(const std::string& name) {
     return &it->second;
 }
 
+std::vector<std::string> Catalog::table_names() const {
+    std::shared_lock lk(*tables_mu_);
+    std::vector<std::string> names;
+    names.reserve(tables_.size());
+    for (const auto& [name, _] : tables_)
+        names.push_back(name);
+    return names;
+}
+
 Result<void> Catalog::add_table(const std::string& name, Schema schema,
                                 std::vector<ConstraintMeta> constraints) {
     auto r = ensure_wal_();

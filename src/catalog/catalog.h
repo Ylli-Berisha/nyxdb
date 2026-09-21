@@ -35,6 +35,7 @@ class Catalog {
     bool has_table(const std::string& name) const;
     const Schema* schema_of(const std::string& name) const;
     Table* table(const std::string& name);
+    std::vector<std::string> table_names() const;
     const std::string& data_root() const { return data_root_; }
     usize size() const { return tables_.size(); }
 

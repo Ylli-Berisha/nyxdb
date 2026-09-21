@@ -56,6 +56,9 @@ class Table {
         return std::shared_lock<std::shared_mutex>(*rwlock_);
     }
 
+    Result<void> replace_segments(const std::vector<usize>& indices, const std::string& tmp_dir,
+                                   u64 merged_base_row_id, u64 merged_row_count);
+
   private:
     Table(std::string dir, std::string name, Schema schema, std::vector<ColumnFile> wb_columns,
           std::vector<u8> wb_deleted, u64 wb_base_row_id, std::vector<Segment> segments,
