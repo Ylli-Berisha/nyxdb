@@ -60,12 +60,15 @@ Result<ColumnFile> ColumnFile::create(const std::string& path, TypeId type, bool
         Page page{};
         page.reset(id_res.value());
         ColumnPage::init(page, type, nullable, max_len);
+        auto wr = disk->write_page(page);
+        if (wr.is_err())
+            return Result<ColumnFile>::err(wr.error().message);
 
         auto pool = std::make_unique<BufferPool>(POOL_FRESH_CAPACITY, *disk);
 
         return Result<ColumnFile>::ok(ColumnFile(std::move(disk), std::move(pool), type, nullable,
                                                  capacity, max_len, std::move(page), id_res.value(),
-                                                 true));
+                                                 false));
     } catch (const std::exception& e) {
         return Result<ColumnFile>::err(e.what());
     }

@@ -10,3 +10,8 @@ nyx_add_integration_test(pipeline_e2e_test executor/pipeline_e2e_test.cpp)
 add_executable(server_test server/server_test.cpp)
 target_link_libraries(server_test PRIVATE nyxdb_server_lib GTest::gtest_main)
 add_test(NAME server_test COMMAND server_test)
+
+add_executable(replication_test server/replication_test.cpp)
+target_link_libraries(replication_test PRIVATE nyxdb_server_lib GTest::gtest_main)
+add_test(NAME replication_test COMMAND replication_test)
+set_tests_properties(replication_test PROPERTIES TIMEOUT 200)

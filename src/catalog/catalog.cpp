@@ -317,12 +317,14 @@ std::vector<std::string> Catalog::table_names() const {
 
 Result<void> Catalog::add_table(const std::string& name, Schema schema,
                                 std::vector<ConstraintMeta> constraints) {
-    auto r = ensure_wal_();
-    if (r.is_err())
-        return r;
-    auto lw = wal_->log_create_table(canonicalize(name), schema);
-    if (lw.is_err())
-        return lw;
+    if (!replay_mode_) {
+        auto r = ensure_wal_();
+        if (r.is_err())
+            return r;
+        auto lw = wal_->log_create_table(canonicalize(name), schema);
+        if (lw.is_err())
+            return lw;
+    }
     auto cr = create_table_(name, std::move(schema));
     if (cr.is_err())
         return cr;
@@ -359,13 +361,14 @@ Result<u64> Catalog::insert(const std::string& table_name,
     if (it == tables_.end())
         return Result<u64>::err("insert: table not found: " + table_name);
 
-    auto r = ensure_wal_();
-    if (r.is_err())
-        return Result<u64>::err(r.error().message);
-
-    auto lw = wal_->log_insert(canonical, it->second.schema(), rows);
-    if (lw.is_err())
-        return Result<u64>::err(lw.error().message);
+    if (!replay_mode_) {
+        auto r = ensure_wal_();
+        if (r.is_err())
+            return Result<u64>::err(r.error().message);
+        auto lw = wal_->log_insert(canonical, it->second.schema(), rows);
+        if (lw.is_err())
+            return Result<u64>::err(lw.error().message);
+    }
 
     auto idx_it = indexes_.find(canonical);
     if (idx_it != indexes_.end()) {
@@ -406,7 +409,7 @@ Result<u64> Catalog::insert(const std::string& table_name,
         return ir;
 
     u64 wb_base_after = it->second.wb_base_row_id();
-    if (wb_base_after > wb_base_before) {
+    if (!replay_mode_ && wb_base_after > wb_base_before) {
         auto sf = wal_->log_segment_flush(canonical, wb_base_after);
         if (sf.is_err())
             return Result<u64>::err(sf.error().message);
@@ -426,7 +429,7 @@ Result<u64> Catalog::insert(const std::string& table_name,
         }
     }
 
-    if (wal_->current_offset() > WAL_CHECKPOINT_BYTES) {
+    if (!replay_mode_ && wal_.has_value() && wal_->current_offset() > WAL_CHECKPOINT_BYTES) {
         auto fr = flush_all();
         if (fr.is_err())
             return Result<u64>::err(fr.error().message);
@@ -443,13 +446,14 @@ Result<u64> Catalog::delete_rows(const std::string& name, const std::vector<u64>
     if (it == tables_.end())
         return Result<u64>::err("delete: table not found: " + name);
 
-    auto ew = ensure_wal_();
-    if (ew.is_err())
-        return Result<u64>::err(ew.error().message);
-
-    auto lw = wal_->log_delete(canonical, row_indices);
-    if (lw.is_err())
-        return Result<u64>::err(lw.error().message);
+    if (!replay_mode_) {
+        auto ew = ensure_wal_();
+        if (ew.is_err())
+            return Result<u64>::err(ew.error().message);
+        auto lw = wal_->log_delete(canonical, row_indices);
+        if (lw.is_err())
+            return Result<u64>::err(lw.error().message);
+    }
 
     auto r = it->second.mark_deleted(row_indices);
     if (r.is_err())
@@ -468,19 +472,20 @@ Result<u64> Catalog::update_rows(const std::string& name, const std::vector<u64>
     if (it == tables_.end())
         return Result<u64>::err("update: table not found: " + name);
 
-    auto ew = ensure_wal_();
-    if (ew.is_err())
-        return Result<u64>::err(ew.error().message);
-
-    auto lw = wal_->log_update(canonical, old_indices, schema, new_rows);
-    if (lw.is_err())
-        return Result<u64>::err(lw.error().message);
+    if (!replay_mode_) {
+        auto ew = ensure_wal_();
+        if (ew.is_err())
+            return Result<u64>::err(ew.error().message);
+        auto lw = wal_->log_update(canonical, old_indices, schema, new_rows);
+        if (lw.is_err())
+            return Result<u64>::err(lw.error().message);
+    }
 
     auto ur = it->second.update_rows(old_indices, new_rows);
     if (ur.is_err())
         return Result<u64>::err(ur.error().message);
 
-    if (ur.value().wb_base_after > ur.value().wb_base_before) {
+    if (!replay_mode_ && ur.value().wb_base_after > ur.value().wb_base_before) {
         auto sf = wal_->log_segment_flush(canonical, ur.value().wb_base_after);
         if (sf.is_err())
             return Result<u64>::err(sf.error().message);
@@ -565,10 +570,14 @@ Result<void> Catalog::flush_all() {
     }
 
     if (wal_.has_value()) {
-        auto r = wal_->checkpoint();
-        if (r.is_err())
-            return r;
-        wal_.reset();
+        u64 current = wal_->current_offset();
+        bool safe = !compaction_gate_ || current <= compaction_gate_();
+        if (safe) {
+            auto r = wal_->checkpoint();
+            if (r.is_err())
+                return r;
+            wal_.reset();
+        }
     }
 
     return Result<void>::ok();

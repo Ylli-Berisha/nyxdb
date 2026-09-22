@@ -38,7 +38,7 @@ class WalReader {
     WalReader(WalReader&&) noexcept;
     WalReader& operator=(WalReader&&) noexcept;
 
-    Result<std::vector<WalRecord>> read_all();
+    Result<std::vector<WalRecord>> read_all(u64* bytes_consumed = nullptr);
 
   private:
     explicit WalReader(int fd);

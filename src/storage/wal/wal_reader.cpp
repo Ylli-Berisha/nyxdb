@@ -49,7 +49,7 @@ static bool read_exact(int fd, u8* buf, usize n) {
     return true;
 }
 
-Result<std::vector<WalRecord>> WalReader::read_all() {
+Result<std::vector<WalRecord>> WalReader::read_all(u64* bytes_consumed) {
     u8 hdr[WAL_HEADER_SIZE];
     if (!read_exact(fd_, hdr, WAL_HEADER_SIZE))
         return Result<std::vector<WalRecord>>::err("WalReader: cannot read header");
@@ -566,6 +566,8 @@ Result<std::vector<WalRecord>> WalReader::read_all() {
         records.push_back(std::move(rec));
     }
 
+    if (bytes_consumed)
+        *bytes_consumed = pos - WAL_HEADER_SIZE;
     return Result<std::vector<WalRecord>>::ok(std::move(records));
 }
 

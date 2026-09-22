@@ -46,6 +46,14 @@ add_library(nyxdb_server_lib STATIC
     server/wire.cpp
     server/session.cpp
     server/server.cpp
+    server/replication_session.cpp
+    replication/quic_client.cpp
+    replication/follower_registry.cpp
+    replication/wal_streamer.cpp
+    replication/snapshot.cpp
+    replication/wal_consumer.cpp
+    replication/election.cpp
+    replication/replication_manager.cpp
 )
 target_include_directories(nyxdb_server_lib SYSTEM PUBLIC ${CMAKE_SOURCE_DIR}/third_party/msquic/src/inc)
 target_link_libraries(nyxdb_server_lib PUBLIC nyxdb_core msquic)

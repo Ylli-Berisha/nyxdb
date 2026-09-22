@@ -8,6 +8,7 @@
 #include "storage/disk/value.h"
 #include "storage/wal/wal_writer.h"
 
+#include <functional>
 #include <memory>
 #include <optional>
 #include <shared_mutex>
@@ -49,6 +50,10 @@ class Catalog {
                             const Schema& schema, const std::vector<std::vector<Value>>& new_rows);
     Result<void> flush_all();
 
+    u64 wal_offset() const { return wal_.has_value() ? wal_->current_offset() : 0; }
+    void set_replay_mode(bool v) { replay_mode_ = v; }
+    void set_compaction_gate(std::function<u64()> fn) { compaction_gate_ = std::move(fn); }
+
     const std::vector<ConstraintMeta>& constraints_of(const std::string& table_name) const;
     const std::vector<IndexMeta>& indexes_of(const std::string& table_name) const;
     BTreeIndex* btree_index(const std::string& table_name, const std::string& index_name);
@@ -71,6 +76,8 @@ class Catalog {
     std::unordered_map<std::string, std::vector<ConstraintMeta>> constraint_meta_;
     std::unordered_map<std::string, std::vector<IndexMeta>> index_meta_;
     std::unordered_map<std::string, std::vector<BTreeIndex>> indexes_;
+    bool replay_mode_ = false;
+    std::function<u64()> compaction_gate_;
 };
 
 } // namespace nyx
