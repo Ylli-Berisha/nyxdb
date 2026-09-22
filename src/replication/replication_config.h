@@ -15,8 +15,8 @@ struct NodeConfig {
     std::vector<std::string> peer_addrs;
     u16 port = 4433;
     u64 max_wal_lag_bytes = 4ULL * 1024 * 1024 * 1024;
-    std::string auth_token; // follower uses this to authenticate to leader
-    std::string leader_addr; // "host:port" of current leader (follower only; updated by election)
+    std::string auth_token;
+    std::string leader_addr;
     u32 election_timeout_min_ms = 3000;
     u32 election_timeout_max_ms = 5000;
     u32 heartbeat_interval_ms = 1000;

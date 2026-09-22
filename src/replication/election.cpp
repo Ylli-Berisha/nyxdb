@@ -12,10 +12,6 @@
 
 namespace nyx::replication {
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
 static std::pair<std::string, u16> parse_addr(const std::string& addr) {
     auto colon = addr.rfind(':');
     if (colon == std::string::npos || colon + 1 >= addr.size())
@@ -27,10 +23,6 @@ static std::pair<std::string, u16> parse_addr(const std::string& addr) {
     }
     return {addr.substr(0, colon), port};
 }
-
-// ---------------------------------------------------------------------------
-// Construction
-// ---------------------------------------------------------------------------
 
 ElectionManager::ElectionManager(NodeConfig config, std::function<u64()> get_wal_lsn,
                                  std::function<void()> on_became_leader,
@@ -55,14 +47,8 @@ ElectionManager::~ElectionManager() {
     stop();
 }
 
-// ---------------------------------------------------------------------------
-// Lifecycle
-// ---------------------------------------------------------------------------
-
 void ElectionManager::start() {
     load_state_();
-    // Configured leader skips the initial follower timeout and enters Leader state
-    // immediately so heartbeats go out before any follower election timer fires.
     if (config_.role == NodeConfig::Role::Leader) {
         std::lock_guard<std::mutex> lk(state_mu_);
         role_ = Role::Leader;
@@ -86,10 +72,6 @@ void ElectionManager::set_send_fn(
     std::lock_guard<std::mutex> lk(send_fn_mu_);
     send_fn_ = std::move(fn);
 }
-
-// ---------------------------------------------------------------------------
-// Incoming frame dispatch (called from server / C6)
-// ---------------------------------------------------------------------------
 
 void ElectionManager::on_heartbeat(u64 term, const std::string& leader_id) {
     Msg m;
@@ -124,10 +106,6 @@ void ElectionManager::on_vote_resp(u64 term, bool granted) {
     msg_cv_.notify_one();
 }
 
-// ---------------------------------------------------------------------------
-// Public readers
-// ---------------------------------------------------------------------------
-
 bool ElectionManager::is_leader() const {
     std::lock_guard<std::mutex> lk(state_mu_);
     return role_ == Role::Leader;
@@ -142,10 +120,6 @@ std::string ElectionManager::current_leader_id() const {
     std::lock_guard<std::mutex> lk(state_mu_);
     return current_leader_;
 }
-
-// ---------------------------------------------------------------------------
-// Main loop
-// ---------------------------------------------------------------------------
 
 void ElectionManager::loop_() {
     while (running_) {
@@ -173,7 +147,6 @@ void ElectionManager::loop_() {
         }
 
         if (batch.empty()) {
-            // Timeout fired
             Role r;
             {
                 std::lock_guard<std::mutex> lk(state_mu_);
@@ -189,10 +162,6 @@ void ElectionManager::loop_() {
         }
     }
 }
-
-// ---------------------------------------------------------------------------
-// Message processing
-// ---------------------------------------------------------------------------
 
 void ElectionManager::process_msg_(Msg& msg) {
     switch (msg.tag) {
@@ -232,8 +201,12 @@ void ElectionManager::handle_heartbeat_(const Msg& msg) {
             current_leader_ = msg.from;
         } else if (role_ == Role::Follower) {
             current_leader_ = msg.from;
+        } else if (role_ == Role::Leader && msg.from != config_.node_id) {
+            role_ = Role::Follower;
+            became_follower = true;
+            current_leader_ = msg.from;
+            persist_term = current_term_;
         }
-        // Leader receiving same-term heartbeat: ignore — we are the authority.
     }
 
     if (persist_term > 0)
@@ -307,13 +280,8 @@ void ElectionManager::handle_vote_resp_(const Msg& msg) {
             return;
     }
 
-    // We have a majority — become leader outside the lock
     become_leader_();
 }
-
-// ---------------------------------------------------------------------------
-// State transitions
-// ---------------------------------------------------------------------------
 
 void ElectionManager::become_leader_() {
     {
@@ -368,10 +336,6 @@ void ElectionManager::start_election_() {
     if (1 >= majority)
         become_leader_();
 }
-
-// ---------------------------------------------------------------------------
-// Outbound messages
-// ---------------------------------------------------------------------------
 
 void ElectionManager::send_heartbeats_() {
     if (non_self_peers_.empty())
@@ -467,15 +431,10 @@ void ElectionManager::fire_and_forget_(std::string addr, server::FrameType type,
             return;
 
         c.send_frame(type, 0, payload);
-        // Give QUIC time to deliver the frame before RegistrationClose tears down the context.
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
         c.close();
     }).detach();
 }
-
-// ---------------------------------------------------------------------------
-// Persistence
-// ---------------------------------------------------------------------------
 
 void ElectionManager::persist_state_(u64 term, const std::string& voted_for) {
     std::string path = state_dir_ + "/election_state.bin";
@@ -515,10 +474,6 @@ void ElectionManager::load_state_() {
     }
     ::close(fd);
 }
-
-// ---------------------------------------------------------------------------
-// Misc
-// ---------------------------------------------------------------------------
 
 std::chrono::milliseconds ElectionManager::election_timeout_() const {
     static thread_local std::mt19937 rng(std::random_device{}());

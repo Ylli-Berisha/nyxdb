@@ -25,10 +25,6 @@ static const std::string TOKEN = "repl-test-secret";
 static const std::string LEADER_ROOT = "/tmp/nyxdb_repl_test_leader";
 static const std::string FOLLOWER_ROOT = "/tmp/nyxdb_repl_test_follower";
 
-// ---------------------------------------------------------------------------
-// QUIC callbacks for test clients
-// ---------------------------------------------------------------------------
-
 struct TcCtx {
     std::atomic<bool> connected{false};
     std::atomic<bool> stream_ready{false};
@@ -71,10 +67,6 @@ static QUIC_STATUS QUIC_API tc_stream_cb(HQUIC, void* c, QUIC_STREAM_EVENT* ev) 
     }
     return QUIC_STATUS_SUCCESS;
 }
-
-// ---------------------------------------------------------------------------
-// QueryClient: thin QUIC wrapper for test queries
-// ---------------------------------------------------------------------------
 
 class QueryClient {
   public:
@@ -143,7 +135,6 @@ class QueryClient {
         return h.type == FrameType::AUTH_OK;
     }
 
-    // Execute a write or DDL statement. Returns rows_affected, or -1 on error.
     i64 exec(const std::string& sql) {
         u32 qid = next_qid_++;
         std::vector<byte> buf;
@@ -170,8 +161,6 @@ class QueryClient {
         }
     }
 
-    // Execute a SELECT and return the row count from the first column.
-    // Returns -1 on any error (table missing, timeout, etc.).
     i64 query_row_count(const std::string& sql) {
         u32 qid = next_qid_++;
         std::vector<byte> buf;
@@ -179,7 +168,6 @@ class QueryClient {
         encode_str(buf, sql);
         send_raw(std::move(buf));
 
-        // First frame — META or ERR
         {
             auto frame = recv_frame();
             if (frame.empty())
@@ -201,7 +189,6 @@ class QueryClient {
             if (h.type == FrameType::RESULT_END)
                 break;
             if (h.type == FrameType::RESULT_COL && !got_col) {
-                // payload: u16(col_idx) u64(row_count) rows...
                 if (frame.size() >= FRAME_HEADER_SIZE + 2 + 8) {
                     row_count = 0;
                     for (int i = 0; i < 8; ++i)
@@ -272,10 +259,6 @@ class QueryClient {
     u32 next_qid_ = 1;
 };
 
-// ---------------------------------------------------------------------------
-// Helper: build NodeConfig for tests with short election/heartbeat timings
-// ---------------------------------------------------------------------------
-
 static NodeConfig make_leader_cfg() {
     NodeConfig cfg;
     cfg.node_id = "127.0.0.1";
@@ -302,10 +285,6 @@ static NodeConfig make_follower_cfg() {
     cfg.heartbeat_interval_ms = 200;
     return cfg;
 }
-
-// ---------------------------------------------------------------------------
-// ReplicationTest fixture
-// ---------------------------------------------------------------------------
 
 class ReplicationTest : public ::testing::Test {
   protected:
@@ -335,7 +314,7 @@ class ReplicationTest : public ::testing::Test {
     }
 
     bool wait_for(std::function<bool()> fn, std::chrono::seconds timeout = std::chrono::seconds(8),
-                  std::chrono::milliseconds poll = std::chrono::milliseconds(200)) {
+                  std::chrono::milliseconds poll = std::chrono::milliseconds(50)) {
         auto deadline = std::chrono::steady_clock::now() + timeout;
         while (std::chrono::steady_clock::now() < deadline) {
             if (fn())
@@ -345,8 +324,21 @@ class ReplicationTest : public ::testing::Test {
         return false;
     }
 
-    // Open a fresh QueryClient to `port`, auth, SELECT, return row count.
-    // Returns -2 on connection/auth failure, -1 on query error (table missing).
+    bool wait_replicated(u16 port, const std::string& sql, i64 expected,
+                         std::chrono::seconds timeout = std::chrono::seconds(8)) {
+        QueryClient c;
+        if (!c.connect(port) || !c.auth(TOKEN))
+            return false;
+        auto deadline = std::chrono::steady_clock::now() + timeout;
+        while (std::chrono::steady_clock::now() < deadline) {
+            i64 n = c.query_row_count(sql);
+            if (n == expected)
+                return true;
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        }
+        return false;
+    }
+
     i64 select_count(u16 port, const std::string& sql) {
         QueryClient c;
         if (!c.connect(port))
@@ -360,10 +352,6 @@ class ReplicationTest : public ::testing::Test {
     std::unique_ptr<Server> follower_;
 };
 
-// ---------------------------------------------------------------------------
-// Test 1: follower syncs snapshot + WAL from leader
-// ---------------------------------------------------------------------------
-
 TEST_F(ReplicationTest, FollowerReplicatesFromLeader) {
     {
         QueryClient lc;
@@ -373,13 +361,9 @@ TEST_F(ReplicationTest, FollowerReplicatesFromLeader) {
         ASSERT_GE(lc.exec("INSERT INTO rep_t VALUES (1), (2), (3)"), 0);
     }
 
-    bool ok = wait_for([this] { return select_count(FOLLOWER_PORT, "SELECT id FROM rep_t") == 3; });
+    bool ok = wait_replicated(FOLLOWER_PORT, "SELECT id FROM rep_t", 3);
     EXPECT_TRUE(ok) << "follower did not replicate 3 rows within timeout";
 }
-
-// ---------------------------------------------------------------------------
-// Test 2: write to follower is forwarded to leader and replicated back
-// ---------------------------------------------------------------------------
 
 TEST_F(ReplicationTest, WriteForwardingFromFollower) {
     {
@@ -390,19 +374,13 @@ TEST_F(ReplicationTest, WriteForwardingFromFollower) {
         ASSERT_GE(fc.exec("INSERT INTO fwd_t VALUES (10), (20)"), 0);
     }
 
-    bool on_follower =
-        wait_for([this] { return select_count(FOLLOWER_PORT, "SELECT x FROM fwd_t") == 2; });
+    bool on_follower = wait_replicated(FOLLOWER_PORT, "SELECT x FROM fwd_t", 2);
     EXPECT_TRUE(on_follower) << "forwarded writes not visible on follower within timeout";
 
     EXPECT_EQ(select_count(LEADER_PORT, "SELECT x FROM fwd_t"), 2);
 }
 
-// ---------------------------------------------------------------------------
-// Test 3: follower becomes leader after leader failure
-// ---------------------------------------------------------------------------
-
 TEST_F(ReplicationTest, ElectionOnLeaderFailure) {
-    // Seed one row on leader and wait for follower to sync it.
     {
         QueryClient lc;
         ASSERT_TRUE(lc.connect(LEADER_PORT));
@@ -411,23 +389,93 @@ TEST_F(ReplicationTest, ElectionOnLeaderFailure) {
         ASSERT_GE(lc.exec("INSERT INTO elect_t VALUES (1)"), 0);
     }
 
-    bool synced =
-        wait_for([this] { return select_count(FOLLOWER_PORT, "SELECT v FROM elect_t") == 1; });
+    bool synced = wait_replicated(FOLLOWER_PORT, "SELECT v FROM elect_t", 1);
     ASSERT_TRUE(synced) << "follower did not sync initial data before leader failure";
 
-    // Kill the leader.
     leader_.reset();
 
-    // Follower must detect the missing heartbeat and win election.
-    // election_timeout_max_ms=1000 → detects within ~1s; add slack for processing.
     bool elected = wait_for([this] { return follower_->is_leader(); }, std::chrono::seconds(3),
                             std::chrono::milliseconds(50));
     ASSERT_TRUE(elected) << "follower did not become leader within 3s";
 
-    // New leader should execute writes directly (no forwarding).
     QueryClient fc;
     ASSERT_TRUE(fc.connect(FOLLOWER_PORT));
     ASSERT_TRUE(fc.auth(TOKEN));
     ASSERT_EQ(fc.exec("INSERT INTO elect_t VALUES (2)"), 1);
     EXPECT_EQ(fc.query_row_count("SELECT v FROM elect_t"), 2);
+}
+
+TEST_F(ReplicationTest, OldLeaderRejoinsAsFollower) {
+    {
+        QueryClient lc;
+        ASSERT_TRUE(lc.connect(LEADER_PORT));
+        ASSERT_TRUE(lc.auth(TOKEN));
+        ASSERT_GE(lc.exec("CREATE TABLE rejoin_t (v INT NOT NULL)"), 0);
+        ASSERT_GE(lc.exec("INSERT INTO rejoin_t VALUES (1)"), 0);
+    }
+
+    bool synced = wait_replicated(FOLLOWER_PORT, "SELECT v FROM rejoin_t", 1);
+    ASSERT_TRUE(synced) << "follower did not sync initial data";
+
+    leader_.reset();
+
+    bool elected = wait_for([this] { return follower_->is_leader(); }, std::chrono::seconds(3),
+                            std::chrono::milliseconds(50));
+    ASSERT_TRUE(elected) << "follower did not become leader within 3s";
+
+    {
+        QueryClient fc;
+        ASSERT_TRUE(fc.connect(FOLLOWER_PORT));
+        ASSERT_TRUE(fc.auth(TOKEN));
+        ASSERT_EQ(fc.exec("INSERT INTO rejoin_t VALUES (2)"), 1);
+    }
+
+    {
+        auto r = Server::create(LEADER_ROOT, LEADER_PORT, TOKEN, make_leader_cfg());
+        ASSERT_TRUE(r.is_ok()) << r.error().message;
+        leader_ = std::make_unique<Server>(std::move(r.value()));
+        ASSERT_TRUE(leader_->start().is_ok());
+    }
+
+    bool stepped_down = wait_for([this] { return !leader_->is_leader(); }, std::chrono::seconds(5),
+                                 std::chrono::milliseconds(50));
+    ASSERT_TRUE(stepped_down) << "old leader did not step down within 5s";
+
+    bool resynced =
+        wait_replicated(LEADER_PORT, "SELECT v FROM rejoin_t", 2, std::chrono::seconds(10));
+    EXPECT_TRUE(resynced) << "old leader did not resync the missing row within 10s";
+}
+
+TEST_F(ReplicationTest, FollowerCrashRecovery) {
+    {
+        QueryClient lc;
+        ASSERT_TRUE(lc.connect(LEADER_PORT));
+        ASSERT_TRUE(lc.auth(TOKEN));
+        ASSERT_GE(lc.exec("CREATE TABLE crash_t (v INT NOT NULL)"), 0);
+        ASSERT_GE(lc.exec("INSERT INTO crash_t VALUES (1), (2), (3)"), 0);
+    }
+
+    bool synced = wait_replicated(FOLLOWER_PORT, "SELECT v FROM crash_t", 3);
+    ASSERT_TRUE(synced) << "follower did not sync initial data before crash";
+
+    follower_.reset();
+    fs::remove(FOLLOWER_ROOT + "/replication_state.bin");
+
+    {
+        QueryClient lc;
+        ASSERT_TRUE(lc.connect(LEADER_PORT));
+        ASSERT_TRUE(lc.auth(TOKEN));
+        ASSERT_GE(lc.exec("INSERT INTO crash_t VALUES (4), (5)"), 0);
+    }
+
+    {
+        auto r = Server::create(FOLLOWER_ROOT, FOLLOWER_PORT, TOKEN, make_follower_cfg());
+        ASSERT_TRUE(r.is_ok()) << r.error().message;
+        follower_ = std::make_unique<Server>(std::move(r.value()));
+        ASSERT_TRUE(follower_->start().is_ok());
+    }
+
+    bool recovered =
+        wait_replicated(FOLLOWER_PORT, "SELECT v FROM crash_t", 5, std::chrono::seconds(15));
+    EXPECT_TRUE(recovered) << "follower did not recover all 5 rows after crash + snapshot resync";
 }

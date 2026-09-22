@@ -97,7 +97,6 @@ void Session::handle_query_(const byte* payload, usize payload_len, u32 qid) {
     std::string sql(reinterpret_cast<const char*>(payload + 2), sql_len);
 
     if (repl_mgr_ && !repl_mgr_->is_leader() && is_write_sql_(sql)) {
-        // forward_write opens a new QUIC connection — must not block the QUIC callback.
         auto* rm = repl_mgr_;
         HQUIC stream = stream_;
         const QUIC_API_TABLE* tbl = api_;

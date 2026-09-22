@@ -24,9 +24,6 @@ Result<void> SnapshotSender::send(u32 query_id, SendFn send_fn) {
     if (flush_r.is_err())
         return flush_r;
 
-    // Record post-flush WAL position — followers resume streaming from here.
-    // If the WAL was checkpointed, current_wal_lsn() returns 0; use WAL_HEADER_SIZE
-    // so the follower doesn't re-trigger STALE with from_offset=0.
     u64 resume_lsn = db_->current_wal_lsn();
     if (resume_lsn == 0)
         resume_lsn = WAL_HEADER_SIZE;

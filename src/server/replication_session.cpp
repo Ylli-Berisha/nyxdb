@@ -49,8 +49,6 @@ void ReplicationSession::dispatch_(FrameType type, u32 /*query_id*/, const byte*
         return;
     }
 
-    // Election frames arrive on their own fire-and-forget connections (no REPL_HELLO).
-    // Forward them to the ReplicationManager regardless of whether node_id_ is set.
     if (type == FrameType::REPL_HEARTBEAT || type == FrameType::REPL_VOTE_REQ ||
         type == FrameType::REPL_VOTE_RESP) {
         if (!repl_)

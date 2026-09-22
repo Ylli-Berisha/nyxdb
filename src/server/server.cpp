@@ -12,10 +12,6 @@ namespace nyx::server {
 static const QUIC_REGISTRATION_CONFIG reg_config = {"nyxdb", QUIC_EXECUTION_PROFILE_LOW_LATENCY};
 static const QUIC_BUFFER alpn = {5, (uint8_t*)"nyxdb"};
 
-// ---------------------------------------------------------------------------
-// PendingSession: buffers until first complete frame to classify the connection
-// ---------------------------------------------------------------------------
-
 struct PendingSession {
     enum class State { WaitAuth, WaitType };
     State state = State::WaitAuth;
@@ -79,10 +75,6 @@ struct PendingSession {
                 continue;
             }
 
-            // State::WaitType — decide session type from the next frame.
-            // All replication frames (>= REPL_HELLO = 0x20) go to a ReplicationSession,
-            // including election frames (HEARTBEAT/VOTE_REQ/VOTE_RESP) which arrive on
-            // their own fire-and-forget connections without a prior REPL_HELLO.
             bool is_repl = (static_cast<u8>(hdr.type) >= static_cast<u8>(FrameType::REPL_HELLO));
             if (is_repl) {
                 repl_session = new ReplicationSession(repl_mgr, connection, api);
@@ -113,8 +105,6 @@ struct PendingSession {
     }
 };
 
-// ---------------------------------------------------------------------------
-
 struct ConnectionCtx {
     Database* db;
     const std::string* token;
@@ -122,10 +112,6 @@ struct ConnectionCtx {
     replication::ReplicationManager* repl_mgr;
     PendingSession* pending = nullptr;
 };
-
-// ---------------------------------------------------------------------------
-// Server::create
-// ---------------------------------------------------------------------------
 
 Result<Server> Server::create(const std::string& data_dir, u16 port, const std::string& token,
                               replication::NodeConfig node_cfg) {
@@ -194,10 +180,6 @@ Result<Server> Server::create(const std::string& data_dir, u16 port, const std::
     return Result<Server>::ok(std::move(s));
 }
 
-// ---------------------------------------------------------------------------
-// start / run / destructor / move
-// ---------------------------------------------------------------------------
-
 Result<void> Server::start() {
     if (QUIC_FAILED(api_->ListenerOpen(registration_, listener_cb_, this, &listener_)))
         return Result<void>::err("ListenerOpen failed");
@@ -253,10 +235,6 @@ Server& Server::operator=(Server&& o) noexcept {
     }
     return *this;
 }
-
-// ---------------------------------------------------------------------------
-// QUIC callbacks
-// ---------------------------------------------------------------------------
 
 QUIC_STATUS QUIC_API Server::listener_cb_(HQUIC, void* ctx, QUIC_LISTENER_EVENT* ev) {
     auto* self = static_cast<Server*>(ctx);

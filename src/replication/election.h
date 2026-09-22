@@ -38,7 +38,6 @@ class ElectionManager {
     u64 current_term() const;
     std::string current_leader_id() const;
 
-    // Override outbound send; default is fire-and-forget QuicClient.
     void set_send_fn(std::function<void(const std::string& peer_addr, server::FrameType,
                                         const std::vector<byte>&)>
                          fn);

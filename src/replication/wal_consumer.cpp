@@ -93,7 +93,7 @@ void WalConsumer::persist_state_() {
 
     u8 buf[16];
     wal_put_u64(buf, confirmed_lsn_.load());
-    wal_put_u64(buf + 8, 0); // term slot — populated by election (C5)
+    wal_put_u64(buf + 8, 0);
 
     if (::write(fd, buf, 16) == 16)
         ::fsync(fd);
@@ -252,7 +252,6 @@ void WalConsumer::poll_loop_(QuicClient& client) {
             continue;
         }
 
-        // REPL_WAL_BATCH: payload = from_offset(u64) + raw_wal_bytes
         if (resp->data.size() < 8)
             continue;
 
@@ -261,7 +260,7 @@ void WalConsumer::poll_loop_(QuicClient& client) {
         usize batch_len = resp->data.size() - 8;
 
         if (batch_len == 0) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
             continue;
         }
 
@@ -286,7 +285,7 @@ void WalConsumer::loop_() {
         auto client_r = QuicClient::create();
         if (!client_r.is_ok()) {
             spdlog::warn("wal_consumer: QuicClient::create failed: {}", client_r.error().message);
-            std::this_thread::sleep_for(std::chrono::seconds(2));
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
             continue;
         }
 
@@ -306,7 +305,7 @@ void WalConsumer::loop_() {
         if (auth_r.is_err()) {
             spdlog::warn("wal_consumer: connect/auth failed: {}", auth_r.error().message);
             client.close();
-            std::this_thread::sleep_for(std::chrono::seconds(2));
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
             continue;
         }
 
@@ -315,7 +314,7 @@ void WalConsumer::loop_() {
         client.close();
 
         if (running_)
-            std::this_thread::sleep_for(std::chrono::seconds(2));
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
     }
 }
 

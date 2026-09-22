@@ -9,10 +9,6 @@
 
 namespace nyx::replication {
 
-// ---------------------------------------------------------------------------
-// Construction
-// ---------------------------------------------------------------------------
-
 ReplicationManager::ReplicationManager(NodeConfig config, Database* db, std::string data_root)
     : config_(std::move(config)), db_(db), data_root_(std::move(data_root)) {}
 
@@ -26,25 +22,18 @@ std::unique_ptr<ReplicationManager> ReplicationManager::create(NodeConfig config
     return std::unique_ptr<ReplicationManager>(rm);
 }
 
-// ---------------------------------------------------------------------------
-// Lifecycle
-// ---------------------------------------------------------------------------
-
 void ReplicationManager::start() {
     using Role = NodeConfig::Role;
 
     if (config_.role == Role::Standalone)
         return;
 
-    // FollowerRegistry + WalStreamer exist on every non-standalone node (leader uses them,
-    // follower creates them so become_leader_ can activate them without re-allocation).
     registry_ = std::make_unique<FollowerRegistry>();
     streamer_ = std::make_unique<WalStreamer>(db_->wal_path());
 
-    if (config_.role == Role::Follower) {
-        consumer_ = std::make_unique<WalConsumer>(db_, config_, data_root_);
+    consumer_ = std::make_unique<WalConsumer>(db_, config_, data_root_);
+    if (config_.role == Role::Follower)
         consumer_->set_leader_addr(config_.leader_addr);
-    }
 
     election_ = std::make_unique<ElectionManager>(
         config_, [this]() { return db_->current_wal_lsn(); }, [this]() { become_leader_(); },
@@ -66,10 +55,6 @@ void ReplicationManager::stop() {
         consumer_->stop();
 }
 
-// ---------------------------------------------------------------------------
-// Role transitions (called from ElectionManager callbacks)
-// ---------------------------------------------------------------------------
-
 void ReplicationManager::become_leader_() {
     std::lock_guard<std::mutex> lk(role_mu_);
     if (leader_.load())
@@ -89,7 +74,6 @@ void ReplicationManager::become_follower_() {
 
     leader_.store(false);
 
-    // Update WalConsumer's leader address from election state
     if (consumer_ && election_) {
         std::string leader_id = election_->current_leader_id();
         std::string addr = peer_addr_for_(leader_id);
@@ -103,10 +87,6 @@ void ReplicationManager::become_follower_() {
     spdlog::info("repl_mgr: became follower");
 }
 
-// ---------------------------------------------------------------------------
-// Readers
-// ---------------------------------------------------------------------------
-
 bool ReplicationManager::is_leader() const {
     if (config_.role == NodeConfig::Role::Standalone)
         return true;
@@ -118,27 +98,18 @@ u64 ReplicationManager::safe_compaction_lsn() const {
         return UINT64_MAX;
     if (is_leader() && registry_)
         return registry_->min_confirmed_lsn();
-    return UINT64_MAX; // followers never compact
+    return UINT64_MAX;
 }
-
-// ---------------------------------------------------------------------------
-// REPL_HELLO: follower announces itself on connection
-// ---------------------------------------------------------------------------
 
 void ReplicationManager::on_hello(const std::string& node_id, u64 confirmed_lsn) {
     if (registry_)
         registry_->upsert(node_id, confirmed_lsn, 0);
 }
 
-// ---------------------------------------------------------------------------
-// handle_repl_frame (leader side — dispatch from ReplicationSession)
-// ---------------------------------------------------------------------------
-
 void ReplicationManager::handle_repl_frame(
     const std::string& node_id, server::FrameType type, const byte* payload, usize len,
     std::function<void(server::FrameType, const std::vector<byte>&)> reply) {
 
-    // Election frames are handled regardless of current role
     if (type == server::FrameType::REPL_HEARTBEAT) {
         if (!election_ || len < 8)
             return;
@@ -257,10 +228,6 @@ void ReplicationManager::handle_repl_frame(
     }
 }
 
-// ---------------------------------------------------------------------------
-// forward_write (follower → leader)
-// ---------------------------------------------------------------------------
-
 Result<ExecuteResult> ReplicationManager::forward_write(const std::string& sql) {
     struct FrameQ {
         std::mutex mu;
@@ -331,10 +298,6 @@ Result<ExecuteResult> ReplicationManager::forward_write(const std::string& sql) 
     return Result<ExecuteResult>::err(
         std::string(reinterpret_cast<const char*>(d + 3), std::min((usize)mlen, l - 3)));
 }
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
 
 std::string ReplicationManager::get_leader_addr_() const {
     if (election_) {
