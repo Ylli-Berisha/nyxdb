@@ -205,8 +205,12 @@ struct ShowConstraintsStmt {
     std::string table_name;
 };
 
+struct VacuumStmt {
+    std::string table_name;
+};
+
 using Statement =
     std::variant<SelectStmt, CreateTableStmt, InsertStmt, DropTableStmt, DeleteStmt, UpdateStmt,
-                 CreateIndexStmt, DropIndexStmt, ShowIndexesStmt, ShowConstraintsStmt>;
+                 CreateIndexStmt, DropIndexStmt, ShowIndexesStmt, ShowConstraintsStmt, VacuumStmt>;
 
 } // namespace nyx::ast

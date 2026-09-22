@@ -444,15 +444,29 @@ Result<bound::BoundStatement> Binder::bind(const ast::Statement& stmt, std::stri
                 if (r.is_err())
                     return Result<bound::BoundStatement>::err(r.error());
                 return Result<bound::BoundStatement>::ok(std::move(r.value()));
-            } else {
-                static_assert(std::is_same_v<T, ast::ShowConstraintsStmt>);
+            } else if constexpr (std::is_same_v<T, ast::ShowConstraintsStmt>) {
                 auto r = bind_show_constraints_(s, source);
+                if (r.is_err())
+                    return Result<bound::BoundStatement>::err(r.error());
+                return Result<bound::BoundStatement>::ok(std::move(r.value()));
+            } else {
+                static_assert(std::is_same_v<T, ast::VacuumStmt>);
+                auto r = bind_vacuum(s, source);
                 if (r.is_err())
                     return Result<bound::BoundStatement>::err(r.error());
                 return Result<bound::BoundStatement>::ok(std::move(r.value()));
             }
         },
         stmt);
+}
+
+Result<bound::BoundVacuum> Binder::bind_vacuum(const ast::VacuumStmt& stmt,
+                                               std::string_view source) {
+    source_ = source;
+    if (!catalog_.has_table(stmt.table_name))
+        return Result<bound::BoundVacuum>::err(
+            err_msg_("unknown table: " + stmt.table_name, SourceLoc{0, 0}));
+    return Result<bound::BoundVacuum>::ok({stmt.table_name});
 }
 
 Result<bound::BoundDropTable> Binder::bind_drop_table(const ast::DropTableStmt& stmt,

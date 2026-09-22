@@ -5,6 +5,7 @@
 #include "storage/disk/column_page.h"
 #include "storage/disk/segment.h"
 #include "storage/disk/table.h"
+#include "storage/vacuum.h"
 
 #include <algorithm>
 #include <cerrno>
@@ -151,10 +152,20 @@ static std::vector<u8> merge_deleted_bitmaps(const std::vector<MergeWorker::SegS
     return merged;
 }
 
+static constexpr double kVacuumDeadRowRatio = 0.20;
+
 void MergeWorker::maybe_merge_table_(const std::string& table_name) {
     Table* tbl = catalog_->table(table_name);
     if (!tbl)
         return;
+
+    auto vs = table_dead_row_stats(tbl);
+    if (vs.total_rows > 0 &&
+        static_cast<double>(vs.dead_rows) / static_cast<double>(vs.total_rows) >
+            kVacuumDeadRowRatio) {
+        tbl->seal();
+        vacuum_table(tbl);
+    }
 
     std::vector<SegSnapshot> snaps;
     std::string table_dir;

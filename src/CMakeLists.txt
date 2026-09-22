@@ -8,6 +8,7 @@ add_library(nyxdb_core STATIC
     storage/disk/segment.cpp
     storage/disk/table.cpp
     storage/merge_worker.cpp
+    storage/vacuum.cpp
     storage/disk/index_file.cpp
     storage/disk/btree_index.cpp
     storage/disk/constraint_file.cpp

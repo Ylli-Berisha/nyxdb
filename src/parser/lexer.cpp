@@ -150,6 +150,8 @@ const char* token_kind_name(TokenKind kind) {
         return "CONSTRAINT";
     case TokenKind::KW_CONSTRAINTS:
         return "CONSTRAINTS";
+    case TokenKind::KW_VACUUM:
+        return "VACUUM";
     case TokenKind::END_OF_FILE:
         return "EOF";
     }
@@ -210,6 +212,7 @@ static const std::unordered_map<std::string, TokenKind>& keyword_table() {
         {"default", TokenKind::KW_DEFAULT},
         {"constraint", TokenKind::KW_CONSTRAINT},
         {"constraints", TokenKind::KW_CONSTRAINTS},
+        {"vacuum", TokenKind::KW_VACUUM},
     };
     return table;
 }
