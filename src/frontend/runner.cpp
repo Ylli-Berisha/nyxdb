@@ -3,6 +3,7 @@
 #include "executor/chunk.h"
 #include "executor/expression.h"
 #include "executor/table_scan.h"
+#include "storage/vacuum.h"
 
 #include <numeric>
 #include <type_traits>
@@ -206,6 +207,20 @@ Result<void> run_create_index(Catalog& catalog, const bound::BoundCreateIndex& s
 
 Result<void> run_drop_index(Catalog& catalog, const bound::BoundDropIndex& stmt) {
     return catalog.drop_index(stmt.table_name, stmt.index_name);
+}
+
+Result<u64> run_vacuum(Catalog& catalog, const bound::BoundVacuum& stmt) {
+    Table* tbl = catalog.table(stmt.table_name);
+    if (!tbl)
+        return Result<u64>::err("vacuum: table not found: " + stmt.table_name);
+    auto fr = tbl->seal();
+    if (fr.is_err())
+        return Result<u64>::err("vacuum: seal failed: " + fr.error().message);
+    u64 reclaimed = vacuum_table(tbl);
+    auto ckpt = catalog.flush_all();
+    if (ckpt.is_err())
+        return Result<u64>::err("vacuum: checkpoint failed: " + ckpt.error().message);
+    return Result<u64>::ok(reclaimed);
 }
 
 } // namespace nyx::frontend

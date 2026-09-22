@@ -195,9 +195,13 @@ struct BoundShowConstraints {
     std::string table_name;
 };
 
+struct BoundVacuum {
+    std::string table_name;
+};
+
 using BoundStatement = std::variant<BoundSelect, BoundCreateTable, BoundInsert, BoundDropTable,
                                     BoundDelete, BoundUpdate, BoundCreateIndex, BoundDropIndex,
-                                    BoundShowIndexes, BoundShowConstraints>;
+                                    BoundShowIndexes, BoundShowConstraints, BoundVacuum>;
 
 TypeId bound_expr_type(const BoundExpr& e);
 bool bound_expr_nullable(const BoundExpr& e);

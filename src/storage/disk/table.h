@@ -41,6 +41,7 @@ class Table {
     Result<void> truncate(u64 target_rows);
     Result<void> flush();
     Result<void> fsync();
+    Result<void> seal();
 
     bool has_deletions() const { return !wb_deleted_.empty(); }
     const std::vector<u8>& deleted_bitmap() const { return wb_deleted_; }

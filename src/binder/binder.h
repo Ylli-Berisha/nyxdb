@@ -33,6 +33,7 @@ class Binder {
                                                   std::string_view source);
     Result<bound::BoundShowIndexes> bind_show_indexes(const ast::ShowIndexesStmt& stmt,
                                                       std::string_view source);
+    Result<bound::BoundVacuum> bind_vacuum(const ast::VacuumStmt& stmt, std::string_view source);
     Result<bound::BoundStatement> bind(const ast::Statement& stmt, std::string_view source);
 
   private:

@@ -357,6 +357,13 @@ Result<ast::Statement> Parser::parse_one_statement_() {
             return Result<ast::Statement>::err(r.error().message);
         return Result<ast::Statement>::ok(ast::Statement{std::move(r.value())});
     }
+    case TokenKind::KW_VACUUM: {
+        consume_();
+        if (peek_().kind != TokenKind::IDENTIFIER)
+            return Result<ast::Statement>::err(
+                err_msg_("expected table name after VACUUM", peek_()));
+        return Result<ast::Statement>::ok(ast::VacuumStmt{consume_().text});
+    }
     default:
         return Result<ast::Statement>::err(err_msg_("expected statement", peek_()));
     }

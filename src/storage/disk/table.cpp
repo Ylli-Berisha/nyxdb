@@ -499,6 +499,11 @@ Result<void> Table::flush() {
     return Result<void>::ok();
 }
 
+Result<void> Table::seal() {
+    std::unique_lock lk(*rwlock_);
+    return flush_write_buffer_();
+}
+
 Result<void> Table::fsync() {
     std::unique_lock lk(*rwlock_);
     for (auto& col : wb_columns_) {
