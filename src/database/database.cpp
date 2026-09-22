@@ -34,7 +34,8 @@ static Value extract(const ColumnVector& col, size_t row) {
 
 Database::Database(Catalog catalog)
     : catalog_(std::make_unique<Catalog>(std::move(catalog))),
-      merge_worker_(std::make_unique<MergeWorker>(catalog_.get())) {
+      merge_worker_(std::make_unique<MergeWorker>(catalog_.get())),
+      rw_mu_(std::make_unique<std::shared_mutex>()) {
     merge_worker_->start();
 }
 
@@ -52,6 +53,7 @@ Result<Database> Database::open(const std::string& data_root) {
 }
 
 Result<ExecuteResult> Database::execute(const std::string& sql) {
+    std::shared_lock<std::shared_mutex> lk(*rw_mu_);
     Lexer lex(sql);
     auto toks = lex.tokenize();
     if (!toks.is_ok())
@@ -196,6 +198,59 @@ Result<ExecuteResult> Database::execute(const std::string& sql) {
             }
         },
         bound.value());
+}
+
+Result<void> Database::reopen() {
+    std::string root = catalog_->data_root();
+    if (merge_worker_) {
+        merge_worker_->stop();
+        merge_worker_.reset();
+    }
+    auto cat = Catalog::load(root);
+    if (!cat.is_ok())
+        return Result<void>::err(cat.error().message);
+    {
+        std::unique_lock<std::shared_mutex> lk(*rw_mu_);
+        catalog_ = std::make_unique<Catalog>(std::move(cat.value()));
+    }
+    merge_worker_ = std::make_unique<MergeWorker>(catalog_.get());
+    merge_worker_->start();
+    return Result<void>::ok();
+}
+
+Result<void> Database::apply_replicated_record(const WalRecord& rec) {
+    std::shared_lock<std::shared_mutex> lk(*rw_mu_);
+    catalog_->set_replay_mode(true);
+    Result<void> r = Result<void>::ok();
+
+    switch (rec.type) {
+    case WalRecord::Type::CreateTable:
+        r = catalog_->add_table(rec.table_name, rec.schema);
+        break;
+    case WalRecord::Type::Insert: {
+        auto ir = catalog_->insert(rec.table_name, rec.rows);
+        if (ir.is_err())
+            r = Result<void>::err(ir.error().message);
+        break;
+    }
+    case WalRecord::Type::Delete: {
+        auto dr = catalog_->delete_rows(rec.table_name, rec.row_indices);
+        if (dr.is_err())
+            r = Result<void>::err(dr.error().message);
+        break;
+    }
+    case WalRecord::Type::Update: {
+        auto ur = catalog_->update_rows(rec.table_name, rec.row_indices, rec.schema, rec.rows);
+        if (ur.is_err())
+            r = Result<void>::err(ur.error().message);
+        break;
+    }
+    case WalRecord::Type::SegmentFlush:
+        break;
+    }
+
+    catalog_->set_replay_mode(false);
+    return r;
 }
 
 } // namespace nyx

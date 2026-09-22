@@ -1,5 +1,6 @@
 #include "server/server.h"
 
+#include "server/replication_session.h"
 #include "server/session.h"
 
 #include <cstdlib>
@@ -11,14 +12,123 @@ namespace nyx::server {
 static const QUIC_REGISTRATION_CONFIG reg_config = {"nyxdb", QUIC_EXECUTION_PROFILE_LOW_LATENCY};
 static const QUIC_BUFFER alpn = {5, (uint8_t*)"nyxdb"};
 
+// ---------------------------------------------------------------------------
+// PendingSession: buffers until first complete frame to classify the connection
+// ---------------------------------------------------------------------------
+
+struct PendingSession {
+    enum class State { WaitAuth, WaitType };
+    State state = State::WaitAuth;
+    std::vector<byte> buf;
+
+    Session* client_session = nullptr;
+    ReplicationSession* repl_session = nullptr;
+
+    Database* db;
+    const std::string* token;
+    const QUIC_API_TABLE* api;
+    replication::ReplicationManager* repl_mgr;
+    HQUIC connection;
+    HQUIC stream = nullptr;
+
+    void on_stream(HQUIC s) { stream = s; }
+
+    void on_data(const byte* data, usize len) {
+        if (client_session) {
+            client_session->on_data(data, len);
+            return;
+        }
+        if (repl_session) {
+            repl_session->on_data(data, len);
+            return;
+        }
+
+        buf.insert(buf.end(), data, data + len);
+
+        while (true) {
+            FrameHeader hdr;
+            if (!decode_header(buf.data(), buf.size(), hdr))
+                break;
+            if (buf.size() < hdr.length)
+                break;
+
+            const byte* payload = buf.data() + FRAME_HEADER_SIZE;
+            usize payload_len = hdr.length - FRAME_HEADER_SIZE;
+
+            if (state == State::WaitAuth) {
+                if (hdr.type == FrameType::AUTH_REQ && payload_len >= 2) {
+                    u16 tlen = decode_u16(payload);
+                    if (payload_len >= static_cast<usize>(2 + tlen)) {
+                        std::string tok(reinterpret_cast<const char*>(payload + 2), tlen);
+                        if (tok == *token) {
+                            std::vector<byte> resp;
+                            encode_header(resp, FrameType::AUTH_OK, hdr.query_id, 0);
+                            send_raw_(std::move(resp));
+                            state = State::WaitType;
+                        } else {
+                            std::vector<byte> resp;
+                            std::string_view emsg = "invalid token";
+                            encode_header(resp, FrameType::AUTH_ERR, hdr.query_id,
+                                          static_cast<u32>(2 + emsg.size()));
+                            encode_str(resp, emsg);
+                            send_raw_(std::move(resp));
+                        }
+                    }
+                }
+                buf.erase(buf.begin(), buf.begin() + static_cast<std::ptrdiff_t>(hdr.length));
+                continue;
+            }
+
+            // State::WaitType — decide session type from the next frame.
+            // All replication frames (>= REPL_HELLO = 0x20) go to a ReplicationSession,
+            // including election frames (HEARTBEAT/VOTE_REQ/VOTE_RESP) which arrive on
+            // their own fire-and-forget connections without a prior REPL_HELLO.
+            bool is_repl = (static_cast<u8>(hdr.type) >= static_cast<u8>(FrameType::REPL_HELLO));
+            if (is_repl) {
+                repl_session = new ReplicationSession(repl_mgr, connection, api);
+                repl_session->on_stream(stream);
+                repl_session->on_data(buf.data(), buf.size());
+                buf.clear();
+            } else {
+                client_session = new Session(db, *token, connection, api, repl_mgr,
+                                             /*pre_authed=*/true);
+                client_session->on_stream(stream);
+                client_session->on_data(buf.data(), buf.size());
+                buf.clear();
+            }
+            return;
+        }
+    }
+
+    void send_raw_(std::vector<byte> outbuf) {
+        if (!stream)
+            return;
+        usize n = outbuf.size();
+        byte* raw = new byte[n];
+        std::memcpy(raw, outbuf.data(), n);
+        QUIC_BUFFER* qbuf = new QUIC_BUFFER;
+        qbuf->Buffer = raw;
+        qbuf->Length = static_cast<u32>(n);
+        api->StreamSend(stream, qbuf, 1, QUIC_SEND_FLAG_NONE, qbuf);
+    }
+};
+
+// ---------------------------------------------------------------------------
+
 struct ConnectionCtx {
     Database* db;
     const std::string* token;
     const QUIC_API_TABLE* api;
-    Session* session = nullptr;
+    replication::ReplicationManager* repl_mgr;
+    PendingSession* pending = nullptr;
 };
 
-Result<Server> Server::create(const std::string& data_dir, u16 port, const std::string& token) {
+// ---------------------------------------------------------------------------
+// Server::create
+// ---------------------------------------------------------------------------
+
+Result<Server> Server::create(const std::string& data_dir, u16 port, const std::string& token,
+                              replication::NodeConfig node_cfg) {
     Server s;
     s.token_ = token;
     s.port_ = port;
@@ -74,8 +184,19 @@ Result<Server> Server::create(const std::string& data_dir, u16 port, const std::
         return Result<Server>::err("Database::open: " + db_r.error().message);
     s.db_ = std::make_unique<Database>(std::move(db_r.value()));
 
+    if (node_cfg.role != replication::NodeConfig::Role::Standalone) {
+        s.repl_mgr_ = replication::ReplicationManager::create(node_cfg, s.db_.get(), data_dir);
+        s.db_->set_compaction_gate(
+            [rm = s.repl_mgr_.get()]() { return rm->safe_compaction_lsn(); });
+        s.repl_mgr_->start();
+    }
+
     return Result<Server>::ok(std::move(s));
 }
+
+// ---------------------------------------------------------------------------
+// start / run / destructor / move
+// ---------------------------------------------------------------------------
 
 Result<void> Server::start() {
     if (QUIC_FAILED(api_->ListenerOpen(registration_, listener_cb_, this, &listener_)))
@@ -103,6 +224,8 @@ Result<void> Server::run() {
 }
 
 Server::~Server() {
+    if (repl_mgr_)
+        repl_mgr_->stop();
     if (listener_)
         api_->ListenerClose(listener_);
     if (configuration_)
@@ -115,7 +238,8 @@ Server::~Server() {
 
 Server::Server(Server&& o) noexcept
     : api_(o.api_), registration_(o.registration_), configuration_(o.configuration_),
-      listener_(o.listener_), db_(std::move(o.db_)), token_(std::move(o.token_)), port_(o.port_) {
+      listener_(o.listener_), db_(std::move(o.db_)), repl_mgr_(std::move(o.repl_mgr_)),
+      token_(std::move(o.token_)), port_(o.port_) {
     o.api_ = nullptr;
     o.registration_ = nullptr;
     o.configuration_ = nullptr;
@@ -130,6 +254,10 @@ Server& Server::operator=(Server&& o) noexcept {
     return *this;
 }
 
+// ---------------------------------------------------------------------------
+// QUIC callbacks
+// ---------------------------------------------------------------------------
+
 QUIC_STATUS QUIC_API Server::listener_cb_(HQUIC, void* ctx, QUIC_LISTENER_EVENT* ev) {
     auto* self = static_cast<Server*>(ctx);
     if (ev->Type == QUIC_LISTENER_EVENT_NEW_CONNECTION) {
@@ -139,6 +267,7 @@ QUIC_STATUS QUIC_API Server::listener_cb_(HQUIC, void* ctx, QUIC_LISTENER_EVENT*
         cctx->db = self->db_.get();
         cctx->token = &self->token_;
         cctx->api = self->api_;
+        cctx->repl_mgr = self->repl_mgr_.get();
 
         self->api_->SetCallbackHandler(conn, (void*)connection_cb_, cctx);
         self->api_->ConnectionSetConfiguration(conn, self->configuration_);
@@ -154,14 +283,23 @@ QUIC_STATUS QUIC_API Server::connection_cb_(HQUIC conn, void* ctx, QUIC_CONNECTI
         break;
     case QUIC_CONNECTION_EVENT_PEER_STREAM_STARTED: {
         HQUIC stream = ev->PEER_STREAM_STARTED.Stream;
-        cctx->session = new Session(cctx->db, *cctx->token, conn, cctx->api);
-        cctx->session->on_stream(stream);
+        cctx->pending = new PendingSession;
+        cctx->pending->db = cctx->db;
+        cctx->pending->token = cctx->token;
+        cctx->pending->api = cctx->api;
+        cctx->pending->repl_mgr = cctx->repl_mgr;
+        cctx->pending->connection = conn;
+        cctx->pending->on_stream(stream);
         cctx->api->SetCallbackHandler(stream, (void*)stream_cb_, cctx);
         break;
     }
     case QUIC_CONNECTION_EVENT_SHUTDOWN_COMPLETE:
+        if (cctx->pending) {
+            delete cctx->pending->client_session;
+            delete cctx->pending->repl_session;
+            delete cctx->pending;
+        }
         cctx->api->ConnectionClose(conn);
-        delete cctx->session;
         delete cctx;
         break;
     default:
@@ -174,9 +312,11 @@ QUIC_STATUS QUIC_API Server::stream_cb_(HQUIC stream, void* ctx, QUIC_STREAM_EVE
     auto* cctx = static_cast<ConnectionCtx*>(ctx);
     switch (ev->Type) {
     case QUIC_STREAM_EVENT_RECEIVE:
-        for (u32 i = 0; i < ev->RECEIVE.BufferCount; ++i) {
-            cctx->session->on_data(reinterpret_cast<const byte*>(ev->RECEIVE.Buffers[i].Buffer),
-                                   ev->RECEIVE.Buffers[i].Length);
+        if (cctx->pending) {
+            for (u32 i = 0; i < ev->RECEIVE.BufferCount; ++i) {
+                cctx->pending->on_data(reinterpret_cast<const byte*>(ev->RECEIVE.Buffers[i].Buffer),
+                                       ev->RECEIVE.Buffers[i].Length);
+            }
         }
         break;
     case QUIC_STREAM_EVENT_SEND_COMPLETE: {

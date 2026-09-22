@@ -8,11 +8,16 @@
 #include <string>
 #include <vector>
 
+namespace nyx::replication {
+class ReplicationManager;
+}
+
 namespace nyx::server {
 
 class Session {
   public:
-    Session(Database* db, std::string token, HQUIC connection, const QUIC_API_TABLE* api);
+    Session(Database* db, std::string token, HQUIC connection, const QUIC_API_TABLE* api,
+            replication::ReplicationManager* repl_mgr = nullptr, bool pre_authed = false);
     ~Session() = default;
 
     void on_stream(HQUIC stream);
@@ -27,11 +32,14 @@ class Session {
     void send_result_(u32 qid, const ExecuteResult& r);
     void send_err_(u32 qid, FrameType t, std::string_view msg);
 
+    static bool is_write_sql_(const std::string& sql);
+
     Database* db_;
     std::string token_;
     HQUIC connection_;
     HQUIC stream_ = nullptr;
     const QUIC_API_TABLE* api_;
+    replication::ReplicationManager* repl_mgr_;
     bool authed_ = false;
 
     std::vector<byte> recv_buf_;

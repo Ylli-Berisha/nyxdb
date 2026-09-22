@@ -3,6 +3,8 @@
 #include "common/result.h"
 #include "common/types.h"
 #include "database/database.h"
+#include "replication/replication_config.h"
+#include "replication/replication_manager.h"
 
 #include <memory>
 #include <msquic.h>
@@ -12,7 +14,8 @@ namespace nyx::server {
 
 class Server {
   public:
-    static Result<Server> create(const std::string& data_dir, u16 port, const std::string& token);
+    static Result<Server> create(const std::string& data_dir, u16 port, const std::string& token,
+                                 replication::NodeConfig node_cfg = {});
     ~Server();
 
     Server(const Server&) = delete;
@@ -22,6 +25,7 @@ class Server {
 
     Result<void> start();
     Result<void> run();
+    bool is_leader() const { return !repl_mgr_ || repl_mgr_->is_leader(); }
 
   private:
     Server() = default;
@@ -35,6 +39,7 @@ class Server {
     HQUIC configuration_ = nullptr;
     HQUIC listener_ = nullptr;
     std::unique_ptr<Database> db_;
+    std::unique_ptr<replication::ReplicationManager> repl_mgr_;
     std::string token_;
     u16 port_ = 0;
 };

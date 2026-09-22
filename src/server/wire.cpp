@@ -101,4 +101,22 @@ bool decode_header(const byte* data, usize len, FrameHeader& out) {
     return true;
 }
 
+u16 decode_u16(const byte* p) {
+    return static_cast<u16>(static_cast<u8>(p[0])) | (static_cast<u16>(static_cast<u8>(p[1])) << 8);
+}
+
+u32 decode_u32(const byte* p) {
+    u32 v = 0;
+    for (int i = 0; i < 4; ++i)
+        v |= static_cast<u32>(static_cast<u8>(p[i])) << (i * 8);
+    return v;
+}
+
+u64 decode_u64(const byte* p) {
+    u64 v = 0;
+    for (int i = 0; i < 8; ++i)
+        v |= static_cast<u64>(static_cast<u8>(p[i])) << (i * 8);
+    return v;
+}
+
 } // namespace nyx::server
