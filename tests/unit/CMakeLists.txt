@@ -47,3 +47,31 @@ nyx_add_test(database_segment_test   database/database_segment_test.cpp)
 nyx_add_test(database_index_test     database/database_index_test.cpp)
 nyx_add_test(database_constraint_test  database/database_constraint_test.cpp)
 nyx_add_test(vacuum_test               database/vacuum_test.cpp)
+
+# new comprehensive tests
+nyx_add_test(schema_test               storage/disk/schema_test.cpp)
+nyx_add_test(constraint_file_test      storage/disk/constraint_file_test.cpp)
+nyx_add_test(index_file_test           storage/disk/index_file_test.cpp)
+nyx_add_test(btree_index_test          storage/disk/btree_index_test.cpp)
+nyx_add_test(wal_reader_test           storage/wal/wal_reader_test.cpp)
+add_executable(follower_registry_test replication/follower_registry_test.cpp)
+target_link_libraries(follower_registry_test PRIVATE nyxdb_server_lib GTest::gtest_main)
+add_test(NAME follower_registry_test COMMAND follower_registry_test)
+
+add_executable(wal_streamer_test replication/wal_streamer_test.cpp)
+target_link_libraries(wal_streamer_test PRIVATE nyxdb_server_lib GTest::gtest_main)
+add_test(NAME wal_streamer_test COMMAND wal_streamer_test)
+nyx_add_test(index_scan_test           executor/index_scan_test.cpp)
+nyx_add_test(runner_test               frontend/runner_test.cpp)
+
+add_executable(wire_test server/wire_test.cpp)
+target_link_libraries(wire_test PRIVATE nyxdb_server_lib GTest::gtest_main)
+add_test(NAME wire_test COMMAND wire_test)
+
+add_executable(session_logic_test server/session_logic_test.cpp)
+target_link_libraries(session_logic_test PRIVATE nyxdb_server_lib GTest::gtest_main)
+add_test(NAME session_logic_test COMMAND session_logic_test)
+
+add_executable(replication_session_test server/replication_session_test.cpp)
+target_link_libraries(replication_session_test PRIVATE nyxdb_server_lib GTest::gtest_main)
+add_test(NAME replication_session_test COMMAND replication_session_test)

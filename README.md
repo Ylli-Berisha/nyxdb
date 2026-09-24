@@ -479,17 +479,22 @@ ctest --test-dir build --output-on-failure -j$(nproc)
 ctest --test-dir build -R vacuum_test --output-on-failure
 ```
 
-There are 47 test suites spanning every layer:
+There are 60 test suites spanning every layer:
 
 | Layer | Suites |
 |---|---|
-| Storage (disk) | `disk_manager`, `column_page`, `column_file`, `segment`, `table`, `truncate` |
+| Storage (disk) | `disk_manager`, `column_page`, `column_file`, `segment`, `table`, `truncate`, `schema`, `constraint_file`, `index_file`, `btree_index` |
 | Storage (memory) | `buffer_pool`, `lru_k_replacer` |
-| WAL | `wal_writer` |
-| Executor | `chunk`, `column_vector`, `expression`, `filter`, `project`, `sort`, `limit`, `hash_join`, `nested_loop_join`, `hash_aggregate`, `selection_vector`, `table_scan` |
+| WAL | `wal_writer`, `wal_reader` |
+| Executor | `chunk`, `column_vector`, `expression`, `filter`, `project`, `sort`, `limit`, `hash_join`, `nested_loop_join`, `hash_aggregate`, `selection_vector`, `table_scan`, `index_scan` |
 | Parser | `lexer`, `parser_select`, `parser_select_full`, `parser_expr`, `parser_ddl_dml`, `parse_error` |
 | Binder | `bind_create_table`, `bind_insert`, `bind_select_from`, `bind_select_full`, `bind_expression` |
 | Planner | `planner`, `planner_agg`, `planner_join` |
+| Frontend | `runner` |
 | Database | `database`, `database_segment`, `database_wal`, `database_index`, `database_constraint`, `vacuum` |
 | Catalog | `catalog` |
-| Integration | `scan_e2e`, `server`, `replication` |
+| Replication | `follower_registry`, `wal_streamer` |
+| Server | `wire`, `session_logic`, `replication_session` |
+| Integration | `scan_e2e`, `pipeline_e2e`, `server`, `replication`, `replication_mp` |
+
+The `replication_mp` suite spawns real server processes with `fork`/`exec` and exercises leader election, write forwarding, crash recovery, and follower rejoin using `SIGTERM`/`SIGKILL`.
