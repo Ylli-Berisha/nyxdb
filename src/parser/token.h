@@ -89,6 +89,13 @@ enum class TokenKind : u8 {
     KW_CONSTRAINT,
     KW_CONSTRAINTS,
     KW_VACUUM,
+    KW_PARTITION,
+    KW_RANGE,
+    KW_LESS,
+    KW_THAN,
+    KW_MAXVALUE,
+    KW_ALTER,
+    KW_ADD,
 
     END_OF_FILE,
 };

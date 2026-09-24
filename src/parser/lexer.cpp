@@ -152,6 +152,20 @@ const char* token_kind_name(TokenKind kind) {
         return "CONSTRAINTS";
     case TokenKind::KW_VACUUM:
         return "VACUUM";
+    case TokenKind::KW_PARTITION:
+        return "PARTITION";
+    case TokenKind::KW_RANGE:
+        return "RANGE";
+    case TokenKind::KW_LESS:
+        return "LESS";
+    case TokenKind::KW_THAN:
+        return "THAN";
+    case TokenKind::KW_MAXVALUE:
+        return "MAXVALUE";
+    case TokenKind::KW_ALTER:
+        return "ALTER";
+    case TokenKind::KW_ADD:
+        return "ADD";
     case TokenKind::END_OF_FILE:
         return "EOF";
     }
@@ -213,6 +227,13 @@ static const std::unordered_map<std::string, TokenKind>& keyword_table() {
         {"constraint", TokenKind::KW_CONSTRAINT},
         {"constraints", TokenKind::KW_CONSTRAINTS},
         {"vacuum", TokenKind::KW_VACUUM},
+        {"partition", TokenKind::KW_PARTITION},
+        {"range", TokenKind::KW_RANGE},
+        {"less", TokenKind::KW_LESS},
+        {"than", TokenKind::KW_THAN},
+        {"maxvalue", TokenKind::KW_MAXVALUE},
+        {"alter", TokenKind::KW_ALTER},
+        {"add", TokenKind::KW_ADD},
     };
     return table;
 }

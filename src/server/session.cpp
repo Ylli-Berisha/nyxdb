@@ -1,6 +1,7 @@
 #include "server/session.h"
 
 #include "replication/replication_manager.h"
+#include "server/coordinator.h"
 
 #include <cctype>
 #include <cstring>
@@ -9,9 +10,10 @@
 namespace nyx::server {
 
 Session::Session(Database* db, std::string token, HQUIC connection, const QUIC_API_TABLE* api,
-                 replication::ReplicationManager* repl_mgr, bool pre_authed)
-    : db_(db), token_(std::move(token)), connection_(connection), api_(api), repl_mgr_(repl_mgr),
-      authed_(pre_authed) {}
+                 replication::ReplicationManager* repl_mgr, bool pre_authed,
+                 Coordinator* coordinator)
+    : db_(db), coordinator_(coordinator), token_(std::move(token)), connection_(connection),
+      api_(api), repl_mgr_(repl_mgr), authed_(pre_authed) {}
 
 void Session::on_stream(HQUIC stream) {
     stream_ = stream;
@@ -135,7 +137,7 @@ void Session::handle_query_(const byte* payload, usize payload_len, u32 qid) {
         return;
     }
 
-    auto r = db_->execute(sql);
+    Result<ExecuteResult> r = coordinator_ ? coordinator_->execute(sql) : db_->execute(sql);
     if (!r.is_ok()) {
         send_err_(qid, FrameType::QUERY_ERR, r.error().message);
         return;

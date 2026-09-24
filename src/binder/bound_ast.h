@@ -6,6 +6,7 @@
 #include "parser/source_loc.h"
 #include "storage/disk/constraint_file.h"
 #include "storage/disk/schema.h"
+#include "storage/disk/shard_map_file.h"
 #include "storage/disk/value.h"
 
 #include <memory>
@@ -145,6 +146,7 @@ struct BoundCreateTable {
     std::string table_name;
     Schema schema;
     std::vector<BoundConstraint> constraints;
+    std::optional<ShardMapMeta> shard_map;
 };
 
 struct BoundInsert {
@@ -199,9 +201,15 @@ struct BoundVacuum {
     std::string table_name;
 };
 
-using BoundStatement = std::variant<BoundSelect, BoundCreateTable, BoundInsert, BoundDropTable,
-                                    BoundDelete, BoundUpdate, BoundCreateIndex, BoundDropIndex,
-                                    BoundShowIndexes, BoundShowConstraints, BoundVacuum>;
+struct BoundAlterAddPartition {
+    std::string table_name;
+    ShardMapMeta updated_shard_map;
+};
+
+using BoundStatement =
+    std::variant<BoundSelect, BoundCreateTable, BoundInsert, BoundDropTable, BoundDelete,
+                 BoundUpdate, BoundCreateIndex, BoundDropIndex, BoundShowIndexes,
+                 BoundShowConstraints, BoundVacuum, BoundAlterAddPartition>;
 
 TypeId bound_expr_type(const BoundExpr& e);
 bool bound_expr_nullable(const BoundExpr& e);

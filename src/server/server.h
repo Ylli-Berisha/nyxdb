@@ -5,6 +5,7 @@
 #include "database/database.h"
 #include "replication/replication_config.h"
 #include "replication/replication_manager.h"
+#include "server/coordinator.h"
 
 #include <memory>
 #include <msquic.h>
@@ -39,6 +40,7 @@ class Server {
     HQUIC configuration_ = nullptr;
     HQUIC listener_ = nullptr;
     std::unique_ptr<Database> db_;
+    std::unique_ptr<Coordinator> coordinator_;
     std::unique_ptr<replication::ReplicationManager> repl_mgr_;
     std::string token_;
     u16 port_ = 0;

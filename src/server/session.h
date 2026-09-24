@@ -14,10 +14,13 @@ class ReplicationManager;
 
 namespace nyx::server {
 
+class Coordinator;
+
 class Session {
   public:
     Session(Database* db, std::string token, HQUIC connection, const QUIC_API_TABLE* api,
-            replication::ReplicationManager* repl_mgr = nullptr, bool pre_authed = false);
+            replication::ReplicationManager* repl_mgr = nullptr, bool pre_authed = false,
+            Coordinator* coordinator = nullptr);
     ~Session() = default;
 
     void on_stream(HQUIC stream);
@@ -35,6 +38,7 @@ class Session {
     static bool is_write_sql_(const std::string& sql);
 
     Database* db_;
+    Coordinator* coordinator_;
     std::string token_;
     HQUIC connection_;
     HQUIC stream_ = nullptr;
