@@ -36,6 +36,8 @@ enum class FrameType : u8 {
 
     REPL_FORWARD_WRITE = 0x40,
     REPL_FORWARD_RESP = 0x41,
+
+    NOTIFY_LEADER = 0x50,
 };
 
 struct FrameHeader {

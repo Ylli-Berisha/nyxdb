@@ -1,6 +1,6 @@
 # nyxdb
 
-A columnar analytical database written from scratch in C++17. Persistent immutable segment storage, a write-ahead log, B+ tree indexes, PRIMARY KEY / UNIQUE constraints, leader-follower replication over QUIC, and a background merge + vacuum engine.
+A columnar analytical database written from scratch in C++17. Persistent immutable segment storage, a write-ahead log, B+ tree indexes, PRIMARY KEY / UNIQUE constraints, leader-follower replication over QUIC, horizontal range sharding with automatic leader-failover notification, and a background merge + vacuum engine.
 
 ---
 
@@ -12,6 +12,7 @@ A columnar analytical database written from scratch in C++17. Persistent immutab
 - [Getting Started](#getting-started)
 - [Server Mode](#server-mode)
 - [Replication](#replication)
+- [Sharding](#sharding)
 - [Storage Internals](#storage-internals)
 - [Building](#building)
 - [Testing](#testing)
@@ -31,6 +32,7 @@ A columnar analytical database written from scratch in C++17. Persistent immutab
 | **Query engine** | Volcano-model executor: `TableScan`, `IndexScan`, `Filter`, `Project`, `Sort`, `Limit`, `HashAggregate`, `HashJoin` (equi-join only) |
 | **Server** | QUIC transport (msquic), binary frame protocol, token authentication |
 | **Replication** | Leader-follower, Raft-like election, WAL streaming, snapshot bootstrap |
+| **Sharding** | Range-based horizontal partitioning, coordinator node routes SQL, automatic leader-failover notification |
 | **Language** | C++17, ASan + UBSan in debug builds |
 
 ---
@@ -372,6 +374,7 @@ nyxdb supports asynchronous leader-follower replication. The leader streams its 
 | `--peers` | Comma-separated `host:port` list of all nodes including self |
 | `--leader-addr` | Current leader address (followers only, used for initial WAL pull) |
 | `--max-wal-lag-mb` | Max WAL lag before a follower is considered stale (default 4096 MB) |
+| `--coordinator-addr` | Coordinator address; when set the node notifies the coordinator on promotion |
 
 ### How it works
 
@@ -380,6 +383,104 @@ nyxdb supports asynchronous leader-follower replication. The leader streams its 
 - **Write forwarding.** Clients that send a write to a follower have it transparently forwarded to the current leader, which then replicates the result back.
 - **Snapshots.** A follower that is too far behind (or brand new) requests a full snapshot: the leader sends a consistent copy of all segment files and the current WAL offset.
 - **Leader election.** If a follower does not receive a heartbeat within a randomised election timeout (default 3–5 s), it starts an election. Nodes vote for the candidate with the highest WAL LSN. The winner becomes leader for the new term. Election state (term, voted-for) is persisted to survive restarts.
+
+---
+
+## Sharding
+
+nyxdb supports horizontal range sharding. A coordinator node holds the partition map and routes SQL to the appropriate shard nodes. Each shard can itself be a replicated leader-follower pair.
+
+### Topology
+
+```
+clients
+   │
+   ▼
+coordinator  (--role coordinator)
+   │   routes INSERT/SELECT/UPDATE/DELETE by partition key range
+   ├── shard-0-leader   (--role leader)
+   │   └── shard-0-follower (--role follower)
+   └── shard-1-leader   (--role leader)
+       └── shard-1-follower (--role follower)
+```
+
+### Create a sharded table
+
+```sql
+-- Run against the coordinator
+CREATE TABLE orders (
+    id    INT    NOT NULL,
+    price DOUBLE
+)
+PARTITION BY RANGE (id) (
+    PARTITION p0 VALUES LESS THAN (1000) ON '127.0.0.1:4433',
+    PARTITION p1 VALUES LESS THAN (MAXVALUE) ON '127.0.0.1:4434'
+);
+```
+
+The coordinator stores the partition map, propagates `CREATE TABLE` to every shard node, and from then on routes every write and read to the correct shard automatically. A `SELECT` without a partition-key predicate fans out to all shards and merges the results.
+
+### Start a sharded cluster with replication
+
+```bash
+# Shard 0 — leader
+./build/nyxdb_server \
+    --data-dir /data/s0-leader \
+    --token    shardtoken \
+    --port     4433 \
+    --role     leader \
+    --node-id  127.0.0.1 \
+    --peers    127.0.0.1:4433,127.0.0.2:4434 \
+    --coordinator-addr 127.0.0.1:4440
+
+# Shard 0 — follower
+./build/nyxdb_server \
+    --data-dir /data/s0-follower \
+    --token    shardtoken \
+    --port     4434 \
+    --role     follower \
+    --node-id  127.0.0.2 \
+    --peers    127.0.0.1:4433,127.0.0.2:4434 \
+    --leader-addr      127.0.0.1:4433 \
+    --coordinator-addr 127.0.0.1:4440
+
+# Shard 1 — leader
+./build/nyxdb_server \
+    --data-dir /data/s1-leader \
+    --token    shardtoken \
+    --port     4435 \
+    --role     leader \
+    --node-id  127.0.0.3 \
+    --peers    127.0.0.3:4435,127.0.0.4:4436 \
+    --coordinator-addr 127.0.0.1:4440
+
+# Shard 1 — follower
+./build/nyxdb_server \
+    --data-dir /data/s1-follower \
+    --token    shardtoken \
+    --port     4436 \
+    --role     follower \
+    --node-id  127.0.0.4 \
+    --peers    127.0.0.3:4435,127.0.0.4:4436 \
+    --leader-addr      127.0.0.3:4435 \
+    --coordinator-addr 127.0.0.1:4440
+
+# Coordinator
+./build/nyxdb_server \
+    --data-dir /data/coord \
+    --token    shardtoken \
+    --port     4440 \
+    --role     coordinator
+```
+
+| Flag | Description |
+|---|---|
+| `--role coordinator` | Node acts as coordinator; no local database, routes all SQL |
+| `--coordinator-addr` | Address of the coordinator (shard nodes only); enables failover notification |
+
+### Automatic leader failover
+
+When a shard follower wins an election it sends a `NOTIFY_LEADER` frame to the coordinator. The coordinator updates the affected partition addresses in-place and evicts the stale shard connection from its pool. Subsequent writes to that partition are routed to the new leader without operator intervention or restart.
 
 ---
 
@@ -479,7 +580,7 @@ ctest --test-dir build --output-on-failure -j$(nproc)
 ctest --test-dir build -R vacuum_test --output-on-failure
 ```
 
-There are 60 test suites spanning every layer:
+There are 63 test suites spanning every layer:
 
 | Layer | Suites |
 |---|---|
@@ -495,6 +596,6 @@ There are 60 test suites spanning every layer:
 | Catalog | `catalog` |
 | Replication | `follower_registry`, `wal_streamer` |
 | Server | `wire`, `session_logic`, `replication_session` |
-| Integration | `scan_e2e`, `pipeline_e2e`, `server`, `replication`, `replication_mp` |
+| Integration | `scan_e2e`, `pipeline_e2e`, `server`, `replication`, `replication_mp`, `sharding_mp`, `sharding_replication_mp` |
 
-The `replication_mp` suite spawns real server processes with `fork`/`exec` and exercises leader election, write forwarding, crash recovery, and follower rejoin using `SIGTERM`/`SIGKILL`.
+The `replication_mp` suite spawns real server processes with `fork`/`exec` and exercises leader election, write forwarding, crash recovery, and follower rejoin using `SIGTERM`/`SIGKILL`. The `sharding_replication_mp` suite combines both layers: it runs a full coordinator + two replicated shard pairs and verifies that a leader failover triggers a `NOTIFY_LEADER` frame that updates the coordinator's partition map so subsequent writes route to the newly elected leader.

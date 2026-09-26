@@ -4,6 +4,7 @@
 #include "common/types.h"
 #include "server/wire.h"
 
+#include <chrono>
 #include <condition_variable>
 #include <functional>
 #include <memory>
@@ -28,6 +29,7 @@ class QuicClient {
     Result<void> send_frame(server::FrameType type, u32 query_id, const std::vector<byte>& payload);
     void set_frame_handler(std::function<void(server::FrameType, u32, const byte*, usize)> handler);
     void close();
+    void drain(std::chrono::milliseconds timeout = std::chrono::milliseconds(5000));
 
   private:
     QuicClient() = default;

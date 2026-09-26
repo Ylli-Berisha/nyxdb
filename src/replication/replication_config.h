@@ -20,6 +20,7 @@ struct NodeConfig {
     u32 election_timeout_min_ms = 3000;
     u32 election_timeout_max_ms = 5000;
     u32 heartbeat_interval_ms = 1000;
+    std::string coordinator_addr;
 };
 
 inline std::pair<std::string, u16> parse_node_addr(const std::string& addr) {

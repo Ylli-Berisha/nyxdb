@@ -7,6 +7,7 @@
 #include "server/shard_client_pool.h"
 
 #include <memory>
+#include <mutex>
 #include <string>
 
 namespace nyx::server {
@@ -17,10 +18,11 @@ class Coordinator {
 
     Coordinator(const Coordinator&) = delete;
     Coordinator& operator=(const Coordinator&) = delete;
-    Coordinator(Coordinator&&) noexcept = default;
-    Coordinator& operator=(Coordinator&&) noexcept = default;
+    Coordinator(Coordinator&&) noexcept;
+    Coordinator& operator=(Coordinator&&) noexcept;
 
     Result<ExecuteResult> execute(const std::string& sql);
+    void notify_leader(const std::string& old_addr, const std::string& new_addr);
 
   private:
     explicit Coordinator(Catalog cat, std::string token);
@@ -32,6 +34,7 @@ class Coordinator {
                                           const ShardMapMeta& sm);
     Result<ExecuteResult> handle_alter_partition_(const bound::BoundAlterAddPartition& stmt);
 
+    std::mutex mu_;
     Catalog catalog_;
     std::string token_;
     std::unique_ptr<ShardClientPool> pool_;

@@ -106,6 +106,14 @@ void QuicClient::close() {
     }
 }
 
+void QuicClient::drain(std::chrono::milliseconds timeout) {
+    if (!stream_)
+        return;
+    api_->StreamShutdown(stream_, QUIC_STREAM_SHUTDOWN_FLAG_GRACEFUL, 0);
+    std::unique_lock<std::mutex> lk(connect_mu_);
+    connect_cv_.wait_for(lk, timeout, [this] { return stream_ == nullptr; });
+}
+
 QUIC_STATUS QUIC_API QuicClient::connection_cb_(HQUIC conn, void* ctx, QUIC_CONNECTION_EVENT* ev) {
     auto* self = static_cast<QuicClient*>(ctx);
     switch (ev->Type) {
@@ -175,7 +183,11 @@ QUIC_STATUS QUIC_API QuicClient::stream_cb_(HQUIC stream, void* ctx, QUIC_STREAM
     case QUIC_STREAM_EVENT_SHUTDOWN_COMPLETE:
         if (!ev->SHUTDOWN_COMPLETE.AppCloseInProgress)
             self->api_->StreamClose(stream);
-        self->stream_ = nullptr;
+        {
+            std::lock_guard<std::mutex> lk(self->connect_mu_);
+            self->stream_ = nullptr;
+        }
+        self->connect_cv_.notify_all();
         break;
     default:
         break;

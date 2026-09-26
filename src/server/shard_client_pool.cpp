@@ -1,5 +1,7 @@
 #include "server/shard_client_pool.h"
 
+#include <thread>
+
 namespace nyx::server {
 
 Result<ExecuteResult> ShardClientPool::execute(const std::string& addr, const std::string& token,
@@ -40,6 +42,21 @@ Result<ExecuteResult> ShardClientPool::execute(const std::string& addr, const st
     if (!retry.is_ok())
         entry->client.reset();
     return retry;
+}
+
+void ShardClientPool::evict(const std::string& addr) {
+    Entry* entry = nullptr;
+    {
+        std::lock_guard<std::mutex> lk(pool_mu_);
+        auto it = pool_.find(addr);
+        if (it == pool_.end())
+            return;
+        entry = it->second.get();
+    }
+    std::thread([entry]() {
+        std::lock_guard<std::mutex> lk(entry->mu);
+        entry->client.reset();
+    }).detach();
 }
 
 } // namespace nyx::server
