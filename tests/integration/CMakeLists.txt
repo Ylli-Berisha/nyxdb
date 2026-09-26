@@ -23,3 +23,10 @@ target_compile_definitions(replication_mp_test PRIVATE
     NYXDB_SERVER_BIN="$<TARGET_FILE:nyxdb_server>")
 add_test(NAME replication_mp_test COMMAND replication_mp_test)
 set_tests_properties(replication_mp_test PROPERTIES TIMEOUT 300)
+
+add_executable(sharding_mp_test server/sharding_mp_test.cpp)
+target_link_libraries(sharding_mp_test PRIVATE nyxdb_server_lib GTest::gtest_main)
+target_compile_definitions(sharding_mp_test PRIVATE
+    NYXDB_SERVER_BIN="$<TARGET_FILE:nyxdb_server>")
+add_test(NAME sharding_mp_test COMMAND sharding_mp_test)
+set_tests_properties(sharding_mp_test PROPERTIES TIMEOUT 300)

@@ -230,8 +230,8 @@ Server::~Server() {
 
 Server::Server(Server&& o) noexcept
     : api_(o.api_), registration_(o.registration_), configuration_(o.configuration_),
-      listener_(o.listener_), db_(std::move(o.db_)), repl_mgr_(std::move(o.repl_mgr_)),
-      token_(std::move(o.token_)), port_(o.port_) {
+      listener_(o.listener_), db_(std::move(o.db_)), coordinator_(std::move(o.coordinator_)),
+      repl_mgr_(std::move(o.repl_mgr_)), token_(std::move(o.token_)), port_(o.port_) {
     o.api_ = nullptr;
     o.registration_ = nullptr;
     o.configuration_ = nullptr;
