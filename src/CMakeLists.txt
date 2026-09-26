@@ -6,6 +6,7 @@ add_library(nyxdb_core STATIC
     storage/disk/column_file.cpp
     storage/disk/schema.cpp
     storage/disk/segment.cpp
+    storage/disk/shard_map_file.cpp
     storage/disk/table.cpp
     storage/merge_worker.cpp
     storage/vacuum.cpp
@@ -46,6 +47,9 @@ target_link_libraries(nyxdb PRIVATE nyxdb_core)
 add_library(nyxdb_server_lib STATIC
     server/wire.cpp
     server/session.cpp
+    server/shard_client.cpp
+    server/shard_client_pool.cpp
+    server/coordinator.cpp
     server/server.cpp
     server/replication_session.cpp
     replication/quic_client.cpp

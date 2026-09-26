@@ -1,5 +1,6 @@
 #include "server/server.h"
 
+#include "server/coordinator.h"
 #include "server/replication_session.h"
 #include "server/session.h"
 
@@ -21,6 +22,7 @@ struct PendingSession {
     ReplicationSession* repl_session = nullptr;
 
     Database* db;
+    Coordinator* coordinator;
     const std::string* token;
     const QUIC_API_TABLE* api;
     replication::ReplicationManager* repl_mgr;
@@ -83,7 +85,7 @@ struct PendingSession {
                 buf.clear();
             } else {
                 client_session = new Session(db, *token, connection, api, repl_mgr,
-                                             /*pre_authed=*/true);
+                                             /*pre_authed=*/true, coordinator);
                 client_session->on_stream(stream);
                 client_session->on_data(buf.data(), buf.size());
                 buf.clear();
@@ -107,6 +109,7 @@ struct PendingSession {
 
 struct ConnectionCtx {
     Database* db;
+    Coordinator* coordinator;
     const std::string* token;
     const QUIC_API_TABLE* api;
     replication::ReplicationManager* repl_mgr;
@@ -165,16 +168,23 @@ Result<Server> Server::create(const std::string& data_dir, u16 port, const std::
     if (QUIC_FAILED(s.api_->ConfigurationLoadCredential(s.configuration_, &server_cred)))
         return Result<Server>::err("ConfigurationLoadCredential failed");
 
-    auto db_r = Database::open(data_dir);
-    if (!db_r.is_ok())
-        return Result<Server>::err("Database::open: " + db_r.error().message);
-    s.db_ = std::make_unique<Database>(std::move(db_r.value()));
+    if (node_cfg.role == replication::NodeConfig::Role::Coordinator) {
+        auto coord_r = Coordinator::open(data_dir, token);
+        if (!coord_r.is_ok())
+            return Result<Server>::err("Coordinator::open: " + coord_r.error().message);
+        s.coordinator_ = std::make_unique<Coordinator>(std::move(coord_r.value()));
+    } else {
+        auto db_r = Database::open(data_dir);
+        if (!db_r.is_ok())
+            return Result<Server>::err("Database::open: " + db_r.error().message);
+        s.db_ = std::make_unique<Database>(std::move(db_r.value()));
 
-    if (node_cfg.role != replication::NodeConfig::Role::Standalone) {
-        s.repl_mgr_ = replication::ReplicationManager::create(node_cfg, s.db_.get(), data_dir);
-        s.db_->set_compaction_gate(
-            [rm = s.repl_mgr_.get()]() { return rm->safe_compaction_lsn(); });
-        s.repl_mgr_->start();
+        if (node_cfg.role != replication::NodeConfig::Role::Standalone) {
+            s.repl_mgr_ = replication::ReplicationManager::create(node_cfg, s.db_.get(), data_dir);
+            s.db_->set_compaction_gate(
+                [rm = s.repl_mgr_.get()]() { return rm->safe_compaction_lsn(); });
+            s.repl_mgr_->start();
+        }
     }
 
     return Result<Server>::ok(std::move(s));
@@ -220,8 +230,8 @@ Server::~Server() {
 
 Server::Server(Server&& o) noexcept
     : api_(o.api_), registration_(o.registration_), configuration_(o.configuration_),
-      listener_(o.listener_), db_(std::move(o.db_)), repl_mgr_(std::move(o.repl_mgr_)),
-      token_(std::move(o.token_)), port_(o.port_) {
+      listener_(o.listener_), db_(std::move(o.db_)), coordinator_(std::move(o.coordinator_)),
+      repl_mgr_(std::move(o.repl_mgr_)), token_(std::move(o.token_)), port_(o.port_) {
     o.api_ = nullptr;
     o.registration_ = nullptr;
     o.configuration_ = nullptr;
@@ -243,6 +253,7 @@ QUIC_STATUS QUIC_API Server::listener_cb_(HQUIC, void* ctx, QUIC_LISTENER_EVENT*
 
         auto* cctx = new ConnectionCtx;
         cctx->db = self->db_.get();
+        cctx->coordinator = self->coordinator_.get();
         cctx->token = &self->token_;
         cctx->api = self->api_;
         cctx->repl_mgr = self->repl_mgr_.get();
@@ -263,6 +274,7 @@ QUIC_STATUS QUIC_API Server::connection_cb_(HQUIC conn, void* ctx, QUIC_CONNECTI
         HQUIC stream = ev->PEER_STREAM_STARTED.Stream;
         cctx->pending = new PendingSession;
         cctx->pending->db = cctx->db;
+        cctx->pending->coordinator = cctx->coordinator;
         cctx->pending->token = cctx->token;
         cctx->pending->api = cctx->api;
         cctx->pending->repl_mgr = cctx->repl_mgr;

@@ -1,5 +1,6 @@
 #include "catalog/catalog.h"
 
+#include "storage/disk/shard_map_file.h"
 #include "storage/wal/wal_reader.h"
 #include "storage/wal/wal_record.h"
 
@@ -185,6 +186,15 @@ Result<Catalog> Catalog::load(const std::string& data_root) {
                 return Result<Catalog>::err("catalog: read constraints for '" + tbl_name +
                                             "': " + cr.error().message);
             cat.constraint_meta_[tbl_name] = std::move(cr.value());
+        }
+
+        std::string smpath = tbl.dir() + "/shard_map.bin";
+        if (fs::exists(smpath)) {
+            auto sr = ShardMapFile::read(smpath);
+            if (sr.is_err())
+                return Result<Catalog>::err("catalog: read shard_map for '" + tbl_name +
+                                            "': " + sr.error().message);
+            cat.shard_maps_[tbl_name] = std::move(sr.value());
         }
     }
 
@@ -739,6 +749,30 @@ Result<void> Catalog::drop_index(const std::string& table_name, const std::strin
 
     return Result<void>::err("drop_index: index '" + index_name + "' not found on table '" +
                              table_name + "'");
+}
+
+Result<void> Catalog::set_shard_map(const std::string& table_name, ShardMapMeta meta) {
+    std::string canonical = canonicalize(table_name);
+    auto it = tables_.find(canonical);
+    if (it == tables_.end())
+        return Result<void>::err("set_shard_map: table not found: " + table_name);
+    std::string path = it->second.dir() + "/shard_map.bin";
+    auto r = ShardMapFile::write(path, meta);
+    if (r.is_err())
+        return r;
+    shard_maps_[canonical] = std::move(meta);
+    return Result<void>::ok();
+}
+
+const ShardMapMeta* Catalog::shard_map_of(const std::string& table_name) const {
+    auto it = shard_maps_.find(canonicalize(table_name));
+    if (it == shard_maps_.end())
+        return nullptr;
+    return &it->second;
+}
+
+bool Catalog::has_shard_map(const std::string& table_name) const {
+    return shard_maps_.count(canonicalize(table_name)) > 0;
 }
 
 } // namespace nyx

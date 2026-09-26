@@ -64,31 +64,35 @@ int main(int argc, char** argv) {
     node_cfg.leader_addr = leader_addr;
 
     if (!role_str.empty()) {
-        if (node_id.empty() || peers_str.empty()) {
-            std::cerr << "error: --node-id and --peers are required when --role is set\n";
-            return 1;
-        }
-        node_cfg.node_id = node_id;
-        if (role_str == "leader")
-            node_cfg.role = nyx::replication::NodeConfig::Role::Leader;
-        else if (role_str == "follower")
-            node_cfg.role = nyx::replication::NodeConfig::Role::Follower;
-        else {
-            std::cerr << "error: --role must be leader or follower\n";
-            return 1;
-        }
-        std::string peer;
-        for (char ch : peers_str) {
-            if (ch == ',') {
-                if (!peer.empty())
-                    node_cfg.peer_addrs.push_back(peer);
-                peer.clear();
-            } else {
-                peer += ch;
+        if (role_str == "coordinator") {
+            node_cfg.role = nyx::replication::NodeConfig::Role::Coordinator;
+        } else {
+            if (node_id.empty() || peers_str.empty()) {
+                std::cerr << "error: --node-id and --peers are required when --role is set\n";
+                return 1;
             }
-        }
-        if (!peer.empty())
-            node_cfg.peer_addrs.push_back(peer);
+            node_cfg.node_id = node_id;
+            if (role_str == "leader")
+                node_cfg.role = nyx::replication::NodeConfig::Role::Leader;
+            else if (role_str == "follower")
+                node_cfg.role = nyx::replication::NodeConfig::Role::Follower;
+            else {
+                std::cerr << "error: --role must be leader, follower, or coordinator\n";
+                return 1;
+            }
+            std::string peer;
+            for (char ch : peers_str) {
+                if (ch == ',') {
+                    if (!peer.empty())
+                        node_cfg.peer_addrs.push_back(peer);
+                    peer.clear();
+                } else {
+                    peer += ch;
+                }
+            }
+            if (!peer.empty())
+                node_cfg.peer_addrs.push_back(peer);
+        } // end else (not coordinator)
     }
 
     nyx::init_logger(log_level);

@@ -4,6 +4,7 @@
 #include "storage/disk/btree_index.h"
 #include "storage/disk/constraint_file.h"
 #include "storage/disk/schema.h"
+#include "storage/disk/shard_map_file.h"
 #include "storage/disk/table.h"
 #include "storage/disk/value.h"
 #include "storage/wal/wal_writer.h"
@@ -61,6 +62,10 @@ class Catalog {
                            const std::vector<u8>& col_indices, bool unique);
     Result<void> drop_index(const std::string& table_name, const std::string& index_name);
 
+    Result<void> set_shard_map(const std::string& table_name, ShardMapMeta meta);
+    const ShardMapMeta* shard_map_of(const std::string& table_name) const;
+    bool has_shard_map(const std::string& table_name) const;
+
   private:
     explicit Catalog(std::string data_root);
 
@@ -76,6 +81,7 @@ class Catalog {
     std::unordered_map<std::string, std::vector<ConstraintMeta>> constraint_meta_;
     std::unordered_map<std::string, std::vector<IndexMeta>> index_meta_;
     std::unordered_map<std::string, std::vector<BTreeIndex>> indexes_;
+    std::unordered_map<std::string, ShardMapMeta> shard_maps_;
     bool replay_mode_ = false;
     std::function<u64()> compaction_gate_;
 };

@@ -1,6 +1,7 @@
 #include "server/session.h"
 
 #include "replication/replication_manager.h"
+#include "server/coordinator.h"
 
 #include <cctype>
 #include <cstring>
@@ -8,10 +9,76 @@
 
 namespace nyx::server {
 
+namespace {
+
+static void stream_send(HQUIC stream, const QUIC_API_TABLE* tbl, std::vector<byte> buf) {
+    usize n = buf.size();
+    byte* raw = new byte[n];
+    std::memcpy(raw, buf.data(), n);
+    QUIC_BUFFER* qbuf = new QUIC_BUFFER;
+    qbuf->Buffer = raw;
+    qbuf->Length = static_cast<u32>(n);
+    tbl->StreamSend(stream, qbuf, 1, QUIC_SEND_FLAG_NONE, qbuf);
+}
+
+static void send_result_to_stream(HQUIC stream, const QUIC_API_TABLE* tbl, u32 qid,
+                                  const ExecuteResult& r) {
+    const Schema& schema = r.schema;
+    usize col_count = schema.size();
+
+    {
+        std::vector<byte> buf;
+        usize payload_size = 2;
+        for (const auto& col : schema)
+            payload_size += 1 + col.name.size() + 1 + 1;
+        encode_header(buf, FrameType::RESULT_META, qid, static_cast<u32>(payload_size));
+        encode_u16(buf, static_cast<u16>(col_count));
+        for (const auto& col : schema) {
+            encode_u8(buf, static_cast<u8>(col.name.size()));
+            for (char c : col.name)
+                buf.push_back(static_cast<byte>(c));
+            encode_u8(buf, static_cast<u8>(col.type));
+            encode_u8(buf, col.nullable ? 1u : 0u);
+        }
+        stream_send(stream, tbl, std::move(buf));
+    }
+
+    u64 row_count = static_cast<u64>(r.row_count());
+    for (usize ci = 0; ci < col_count; ++ci) {
+        const auto& col_vals = r.columns[ci];
+        TypeId t = schema[ci].type;
+        std::vector<byte> buf;
+        std::vector<byte> payload;
+        encode_u16(payload, static_cast<u16>(ci));
+        encode_u64(payload, row_count);
+        for (const auto& v : col_vals) {
+            if (std::holds_alternative<std::monostate>(v)) {
+                encode_u8(payload, 1u);
+            } else {
+                encode_u8(payload, 0u);
+                encode_value(payload, v, t);
+            }
+        }
+        encode_header(buf, FrameType::RESULT_COL, qid, static_cast<u32>(payload.size()));
+        buf.insert(buf.end(), payload.begin(), payload.end());
+        stream_send(stream, tbl, std::move(buf));
+    }
+
+    {
+        std::vector<byte> buf;
+        encode_header(buf, FrameType::RESULT_END, qid, 8);
+        encode_u64(buf, r.rows_affected);
+        stream_send(stream, tbl, std::move(buf));
+    }
+}
+
+} // namespace
+
 Session::Session(Database* db, std::string token, HQUIC connection, const QUIC_API_TABLE* api,
-                 replication::ReplicationManager* repl_mgr, bool pre_authed)
-    : db_(db), token_(std::move(token)), connection_(connection), api_(api), repl_mgr_(repl_mgr),
-      authed_(pre_authed) {}
+                 replication::ReplicationManager* repl_mgr, bool pre_authed,
+                 Coordinator* coordinator)
+    : db_(db), coordinator_(coordinator), token_(std::move(token)), connection_(connection),
+      api_(api), repl_mgr_(repl_mgr), authed_(pre_authed) {}
 
 void Session::on_stream(HQUIC stream) {
     stream_ = stream;
@@ -135,7 +202,26 @@ void Session::handle_query_(const byte* payload, usize payload_len, u32 qid) {
         return;
     }
 
-    auto r = db_->execute(sql);
+    if (coordinator_) {
+        auto* coord = coordinator_;
+        HQUIC stream = stream_;
+        const QUIC_API_TABLE* tbl = api_;
+        std::thread([coord, stream, tbl, qid, sql = std::move(sql)]() {
+            auto r = coord->execute(sql);
+            if (!r.is_ok()) {
+                std::string_view msg = r.error().message;
+                std::vector<byte> buf;
+                encode_header(buf, FrameType::QUERY_ERR, qid, static_cast<u32>(2 + msg.size()));
+                encode_str(buf, msg);
+                stream_send(stream, tbl, std::move(buf));
+                return;
+            }
+            send_result_to_stream(stream, tbl, qid, r.value());
+        }).detach();
+        return;
+    }
+
+    Result<ExecuteResult> r = db_->execute(sql);
     if (!r.is_ok()) {
         send_err_(qid, FrameType::QUERY_ERR, r.error().message);
         return;

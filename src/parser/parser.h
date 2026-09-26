@@ -47,6 +47,8 @@ class Parser {
     Result<ast::DropIndexStmt> parse_drop_index_();
     Result<ast::ShowIndexesStmt> parse_show_indexes_();
     Result<ast::ShowConstraintsStmt> parse_show_constraints_();
+    Result<ast::PartitionDefAst> parse_partition_def_();
+    Result<ast::AlterAddPartitionStmt> parse_alter_add_partition_();
 
     Result<ast::Statement> parse_one_statement_();
 

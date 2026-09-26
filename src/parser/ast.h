@@ -152,10 +152,19 @@ struct TableConstraint {
     std::vector<std::string> columns;
 };
 
+struct PartitionDefAst {
+    std::string name;
+    bool is_maxvalue = false;
+    ExprPtr upper_bound;
+    std::string node_addr;
+};
+
 struct CreateTableStmt {
     std::string table_name;
     std::vector<ColumnDef> columns;
     std::vector<TableConstraint> constraints;
+    std::optional<std::string> partition_col;
+    std::vector<PartitionDefAst> partition_defs;
 };
 
 struct InsertStmt {
@@ -209,8 +218,13 @@ struct VacuumStmt {
     std::string table_name;
 };
 
-using Statement =
-    std::variant<SelectStmt, CreateTableStmt, InsertStmt, DropTableStmt, DeleteStmt, UpdateStmt,
-                 CreateIndexStmt, DropIndexStmt, ShowIndexesStmt, ShowConstraintsStmt, VacuumStmt>;
+struct AlterAddPartitionStmt {
+    std::string table_name;
+    PartitionDefAst partition;
+};
+
+using Statement = std::variant<SelectStmt, CreateTableStmt, InsertStmt, DropTableStmt, DeleteStmt,
+                               UpdateStmt, CreateIndexStmt, DropIndexStmt, ShowIndexesStmt,
+                               ShowConstraintsStmt, VacuumStmt, AlterAddPartitionStmt>;
 
 } // namespace nyx::ast

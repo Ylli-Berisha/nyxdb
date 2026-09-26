@@ -11,7 +11,7 @@ namespace nyx::replication {
 
 struct NodeConfig {
     std::string node_id;
-    enum class Role { Standalone, Leader, Follower } role = Role::Standalone;
+    enum class Role { Standalone, Leader, Follower, Coordinator } role = Role::Standalone;
     std::vector<std::string> peer_addrs;
     u16 port = 4433;
     u64 max_wal_lag_bytes = 4ULL * 1024 * 1024 * 1024;

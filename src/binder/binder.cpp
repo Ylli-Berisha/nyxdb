@@ -449,9 +449,14 @@ Result<bound::BoundStatement> Binder::bind(const ast::Statement& stmt, std::stri
                 if (r.is_err())
                     return Result<bound::BoundStatement>::err(r.error());
                 return Result<bound::BoundStatement>::ok(std::move(r.value()));
-            } else {
-                static_assert(std::is_same_v<T, ast::VacuumStmt>);
+            } else if constexpr (std::is_same_v<T, ast::VacuumStmt>) {
                 auto r = bind_vacuum(s, source);
+                if (r.is_err())
+                    return Result<bound::BoundStatement>::err(r.error());
+                return Result<bound::BoundStatement>::ok(std::move(r.value()));
+            } else {
+                static_assert(std::is_same_v<T, ast::AlterAddPartitionStmt>);
+                auto r = bind_alter_add_partition(s, source);
                 if (r.is_err())
                     return Result<bound::BoundStatement>::err(r.error());
                 return Result<bound::BoundStatement>::ok(std::move(r.value()));
@@ -467,6 +472,55 @@ Result<bound::BoundVacuum> Binder::bind_vacuum(const ast::VacuumStmt& stmt,
         return Result<bound::BoundVacuum>::err(
             err_msg_("unknown table: " + stmt.table_name, SourceLoc{0, 0}));
     return Result<bound::BoundVacuum>::ok({stmt.table_name});
+}
+
+Result<bound::BoundAlterAddPartition>
+Binder::bind_alter_add_partition(const ast::AlterAddPartitionStmt& stmt, std::string_view source) {
+    source_ = source;
+    if (!catalog_.has_table(stmt.table_name))
+        return Result<bound::BoundAlterAddPartition>::err(
+            err_msg_("unknown table: " + stmt.table_name, SourceLoc{0, 0}));
+    const ShardMapMeta* existing = catalog_.shard_map_of(stmt.table_name);
+    if (!existing)
+        return Result<bound::BoundAlterAddPartition>::err(
+            err_msg_("table is not partitioned: " + stmt.table_name, SourceLoc{0, 0}));
+
+    const Schema* sch = catalog_.schema_of(stmt.table_name);
+    Column pcol_spec = (*sch)[existing->partition_col_idx];
+
+    static const std::vector<bound::BoundBinding> no_bindings;
+    bindings_ = &no_bindings;
+
+    PartitionDef new_pd;
+    new_pd.name = stmt.partition.name;
+    new_pd.is_maxvalue = stmt.partition.is_maxvalue;
+    new_pd.node_addr = stmt.partition.node_addr;
+    if (!stmt.partition.is_maxvalue) {
+        auto be = bind_expr_(*stmt.partition.upper_bound);
+        if (be.is_err()) {
+            bindings_ = nullptr;
+            return Result<bound::BoundAlterAddPartition>::err(be.error());
+        }
+        auto val = fold_constant_expr_(*be.value(), pcol_spec);
+        if (val.is_err()) {
+            bindings_ = nullptr;
+            return Result<bound::BoundAlterAddPartition>::err(val.error());
+        }
+        new_pd.upper_bound = std::move(val.value());
+    }
+    bindings_ = nullptr;
+
+    ShardMapMeta updated = *existing;
+    auto ins_it = updated.partitions.end();
+    for (auto it = updated.partitions.begin(); it != updated.partitions.end(); ++it) {
+        if (it->is_maxvalue) {
+            ins_it = it;
+            break;
+        }
+    }
+    updated.partitions.insert(ins_it, std::move(new_pd));
+
+    return Result<bound::BoundAlterAddPartition>::ok({stmt.table_name, std::move(updated)});
 }
 
 Result<bound::BoundDropTable> Binder::bind_drop_table(const ast::DropTableStmt& stmt,
@@ -753,8 +807,61 @@ Result<bound::BoundCreateTable> Binder::bind_create_table(const ast::CreateTable
             return Result<bound::BoundCreateTable>::err(r.error());
     }
 
+    std::optional<ShardMapMeta> shard_map;
+    if (stmt.partition_col.has_value()) {
+        const std::string& pcol = *stmt.partition_col;
+        u8 pcol_idx = 255;
+        TypeId pcol_type = TypeId::INT32;
+        for (u32 i = 0; i < static_cast<u32>(schema.size()); ++i) {
+            if (schema[i].name == pcol) {
+                pcol_idx = static_cast<u8>(i);
+                pcol_type = schema[i].type;
+                break;
+            }
+        }
+        if (pcol_idx == 255)
+            return Result<bound::BoundCreateTable>::err(
+                err_msg_("partition column not found: " + pcol, SourceLoc{0, 0}));
+        if (stmt.partition_defs.empty())
+            return Result<bound::BoundCreateTable>::err(
+                err_msg_("PARTITION BY requires at least one partition", SourceLoc{0, 0}));
+
+        ShardMapMeta sm;
+        sm.partition_col = pcol;
+        sm.partition_col_idx = pcol_idx;
+
+        static const std::vector<bound::BoundBinding> no_bindings;
+        bindings_ = &no_bindings;
+
+        Column pcol_spec{pcol, pcol_type, true, 255, std::nullopt};
+        bool saw_maxvalue = false;
+        for (const auto& pd : stmt.partition_defs) {
+            if (saw_maxvalue)
+                return Result<bound::BoundCreateTable>::err(
+                    err_msg_("MAXVALUE partition must be last", SourceLoc{0, 0}));
+            PartitionDef pdef;
+            pdef.name = pd.name;
+            pdef.is_maxvalue = pd.is_maxvalue;
+            pdef.node_addr = pd.node_addr;
+            if (!pd.is_maxvalue) {
+                auto be = bind_expr_(*pd.upper_bound);
+                if (be.is_err())
+                    return Result<bound::BoundCreateTable>::err(be.error());
+                auto val = fold_constant_expr_(*be.value(), pcol_spec);
+                if (val.is_err())
+                    return Result<bound::BoundCreateTable>::err(val.error());
+                pdef.upper_bound = std::move(val.value());
+            } else {
+                saw_maxvalue = true;
+            }
+            sm.partitions.push_back(std::move(pdef));
+        }
+        bindings_ = nullptr;
+        shard_map = std::move(sm);
+    }
+
     return Result<bound::BoundCreateTable>::ok(
-        {stmt.table_name, std::move(schema), std::move(constraints)});
+        {stmt.table_name, std::move(schema), std::move(constraints), std::move(shard_map)});
 }
 
 Result<bound::BoundSelect> Binder::bind_select(const ast::SelectStmt& stmt,

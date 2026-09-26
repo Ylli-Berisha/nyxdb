@@ -364,6 +364,12 @@ Result<ast::Statement> Parser::parse_one_statement_() {
                 err_msg_("expected table name after VACUUM", peek_()));
         return Result<ast::Statement>::ok(ast::VacuumStmt{consume_().text});
     }
+    case TokenKind::KW_ALTER: {
+        auto r = parse_alter_add_partition_();
+        if (r.is_err())
+            return Result<ast::Statement>::err(r.error().message);
+        return Result<ast::Statement>::ok(ast::Statement{std::move(r.value())});
+    }
     default:
         return Result<ast::Statement>::err(err_msg_("expected statement", peek_()));
     }
@@ -600,6 +606,39 @@ Result<ast::CreateTableStmt> Parser::parse_create_table_() {
     }
     if (!match_(TokenKind::RPAREN))
         return Result<ast::CreateTableStmt>::err(err_msg_("expected ')'", peek_()));
+
+    if (peek_().kind == TokenKind::KW_PARTITION) {
+        consume_();
+        if (!match_(TokenKind::KW_BY))
+            return Result<ast::CreateTableStmt>::err(
+                err_msg_("expected BY after PARTITION", peek_()));
+        if (!match_(TokenKind::KW_RANGE))
+            return Result<ast::CreateTableStmt>::err(err_msg_("expected RANGE", peek_()));
+        if (!match_(TokenKind::LPAREN))
+            return Result<ast::CreateTableStmt>::err(err_msg_("expected '(' after RANGE", peek_()));
+        if (peek_().kind != TokenKind::IDENTIFIER)
+            return Result<ast::CreateTableStmt>::err(
+                err_msg_("expected partition column name", peek_()));
+        stmt.partition_col = consume_().text;
+        if (!match_(TokenKind::RPAREN))
+            return Result<ast::CreateTableStmt>::err(
+                err_msg_("expected ')' after partition column", peek_()));
+        if (!match_(TokenKind::LPAREN))
+            return Result<ast::CreateTableStmt>::err(
+                err_msg_("expected '(' for partition list", peek_()));
+        while (true) {
+            auto pd = parse_partition_def_();
+            if (pd.is_err())
+                return Result<ast::CreateTableStmt>::err(pd.error().message);
+            stmt.partition_defs.push_back(std::move(pd.value()));
+            if (!match_(TokenKind::COMMA))
+                break;
+        }
+        if (!match_(TokenKind::RPAREN))
+            return Result<ast::CreateTableStmt>::err(
+                err_msg_("expected ')' to close partition list", peek_()));
+    }
+
     return Result<ast::CreateTableStmt>::ok(std::move(stmt));
 }
 
@@ -969,6 +1008,66 @@ Result<ast::TableConstraint> Parser::parse_table_constraint_() {
         return Result<ast::TableConstraint>::err(
             err_msg_("constraint must specify at least one column", peek_()));
     return Result<ast::TableConstraint>::ok(std::move(tc));
+}
+
+Result<ast::PartitionDefAst> Parser::parse_partition_def_() {
+    if (!match_(TokenKind::KW_PARTITION))
+        return Result<ast::PartitionDefAst>::err(err_msg_("expected PARTITION", peek_()));
+    if (peek_().kind != TokenKind::IDENTIFIER)
+        return Result<ast::PartitionDefAst>::err(err_msg_("expected partition name", peek_()));
+    ast::PartitionDefAst pd;
+    pd.name = consume_().text;
+
+    if (!match_(TokenKind::KW_VALUES))
+        return Result<ast::PartitionDefAst>::err(err_msg_("expected VALUES", peek_()));
+    if (!match_(TokenKind::KW_LESS))
+        return Result<ast::PartitionDefAst>::err(err_msg_("expected LESS", peek_()));
+    if (!match_(TokenKind::KW_THAN))
+        return Result<ast::PartitionDefAst>::err(err_msg_("expected THAN", peek_()));
+    if (!match_(TokenKind::LPAREN))
+        return Result<ast::PartitionDefAst>::err(err_msg_("expected '('", peek_()));
+
+    if (peek_().kind == TokenKind::KW_MAXVALUE) {
+        consume_();
+        pd.is_maxvalue = true;
+    } else {
+        auto e = parse_expr_();
+        if (e.is_err())
+            return Result<ast::PartitionDefAst>::err(e.error().message);
+        pd.upper_bound = std::move(e.value());
+    }
+
+    if (!match_(TokenKind::RPAREN))
+        return Result<ast::PartitionDefAst>::err(err_msg_("expected ')'", peek_()));
+
+    if (!match_(TokenKind::KW_ON))
+        return Result<ast::PartitionDefAst>::err(err_msg_("expected ON", peek_()));
+    if (peek_().kind != TokenKind::STRING_LITERAL)
+        return Result<ast::PartitionDefAst>::err(err_msg_("expected node address string", peek_()));
+    pd.node_addr = consume_().text;
+
+    return Result<ast::PartitionDefAst>::ok(std::move(pd));
+}
+
+Result<ast::AlterAddPartitionStmt> Parser::parse_alter_add_partition_() {
+    if (!match_(TokenKind::KW_ALTER))
+        return Result<ast::AlterAddPartitionStmt>::err(err_msg_("expected ALTER", peek_()));
+    if (!match_(TokenKind::KW_TABLE))
+        return Result<ast::AlterAddPartitionStmt>::err(err_msg_("expected TABLE", peek_()));
+    if (peek_().kind != TokenKind::IDENTIFIER)
+        return Result<ast::AlterAddPartitionStmt>::err(err_msg_("expected table name", peek_()));
+    ast::AlterAddPartitionStmt stmt;
+    stmt.table_name = consume_().text;
+
+    if (!match_(TokenKind::KW_ADD))
+        return Result<ast::AlterAddPartitionStmt>::err(err_msg_("expected ADD", peek_()));
+
+    auto pd = parse_partition_def_();
+    if (pd.is_err())
+        return Result<ast::AlterAddPartitionStmt>::err(pd.error().message);
+    stmt.partition = std::move(pd.value());
+
+    return Result<ast::AlterAddPartitionStmt>::ok(std::move(stmt));
 }
 
 } // namespace nyx

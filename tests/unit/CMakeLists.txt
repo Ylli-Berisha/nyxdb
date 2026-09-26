@@ -47,6 +47,7 @@ nyx_add_test(database_segment_test   database/database_segment_test.cpp)
 nyx_add_test(database_index_test     database/database_index_test.cpp)
 nyx_add_test(database_constraint_test  database/database_constraint_test.cpp)
 nyx_add_test(vacuum_test               database/vacuum_test.cpp)
+nyx_add_test(sharding_test             database/sharding_test.cpp)
 
 # new comprehensive tests
 nyx_add_test(schema_test               storage/disk/schema_test.cpp)

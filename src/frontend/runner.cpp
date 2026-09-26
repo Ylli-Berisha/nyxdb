@@ -15,7 +15,15 @@ Result<void> run_create_table(Catalog& catalog, const bound::BoundCreateTable& s
     metas.reserve(stmt.constraints.size());
     for (const auto& c : stmt.constraints)
         metas.push_back({c.kind, c.name, c.col_indices});
-    return catalog.add_table(stmt.table_name, stmt.schema, std::move(metas));
+    auto r = catalog.add_table(stmt.table_name, stmt.schema, std::move(metas));
+    if (r.is_err())
+        return r;
+    if (stmt.shard_map.has_value()) {
+        auto sr = catalog.set_shard_map(stmt.table_name, *stmt.shard_map);
+        if (sr.is_err())
+            return sr;
+    }
+    return Result<void>::ok();
 }
 
 Result<u64> run_insert(Catalog& catalog, const bound::BoundInsert& stmt) {
@@ -221,6 +229,10 @@ Result<u64> run_vacuum(Catalog& catalog, const bound::BoundVacuum& stmt) {
     if (ckpt.is_err())
         return Result<u64>::err("vacuum: checkpoint failed: " + ckpt.error().message);
     return Result<u64>::ok(reclaimed);
+}
+
+Result<void> run_alter_add_partition(Catalog& catalog, const bound::BoundAlterAddPartition& stmt) {
+    return catalog.set_shard_map(stmt.table_name, stmt.updated_shard_map);
 }
 
 } // namespace nyx::frontend
