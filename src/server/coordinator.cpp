@@ -18,6 +18,18 @@ Coordinator::Coordinator(Catalog cat, std::string token)
     : catalog_(std::move(cat)), token_(std::move(token)),
       pool_(std::make_unique<ShardClientPool>()) {}
 
+Coordinator::Coordinator(Coordinator&& o) noexcept
+    : catalog_(std::move(o.catalog_)), token_(std::move(o.token_)), pool_(std::move(o.pool_)) {}
+
+Coordinator& Coordinator::operator=(Coordinator&& o) noexcept {
+    if (this != &o) {
+        catalog_ = std::move(o.catalog_);
+        token_ = std::move(o.token_);
+        pool_ = std::move(o.pool_);
+    }
+    return *this;
+}
+
 Result<Coordinator> Coordinator::open(const std::string& data_root, std::string token) {
     fs::create_directories(data_root);
     auto cat = Catalog::load(data_root);
@@ -43,6 +55,7 @@ static ExecuteResult merge_results(std::vector<ExecuteResult> parts) {
 }
 
 Result<ExecuteResult> Coordinator::execute(const std::string& sql) {
+    std::lock_guard<std::mutex> lk(mu_);
     Lexer lex(sql);
     auto toks = lex.tokenize();
     if (!toks.is_ok())
@@ -503,6 +516,26 @@ Coordinator::handle_alter_partition_(const bound::BoundAlterAddPartition& stmt) 
         return Result<ExecuteResult>::err(r.error().message);
 
     return Result<ExecuteResult>::ok({});
+}
+
+void Coordinator::notify_leader(const std::string& old_addr, const std::string& new_addr) {
+    std::lock_guard<std::mutex> lk(mu_);
+    for (const auto& tname : catalog_.table_names()) {
+        const ShardMapMeta* sm = catalog_.shard_map_of(tname);
+        if (!sm)
+            continue;
+        ShardMapMeta updated = *sm;
+        bool changed = false;
+        for (auto& pd : updated.partitions) {
+            if (pd.node_addr == old_addr) {
+                pd.node_addr = new_addr;
+                changed = true;
+            }
+        }
+        if (changed)
+            catalog_.set_shard_map(tname, std::move(updated));
+    }
+    pool_->evict(old_addr);
 }
 
 } // namespace nyx::server

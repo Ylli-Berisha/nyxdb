@@ -16,6 +16,7 @@ class ShardClientPool {
   public:
     Result<ExecuteResult> execute(const std::string& addr, const std::string& token,
                                   const std::string& sql);
+    void evict(const std::string& addr);
 
   private:
     struct Entry {

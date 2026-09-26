@@ -24,6 +24,7 @@ int main(int argc, char** argv) {
     std::string role_str;
     std::string peers_str;
     std::string leader_addr;
+    std::string coordinator_addr;
     uint64_t max_wal_lag_mb = 4096;
 
     for (int i = 1; i < argc; ++i) {
@@ -44,6 +45,8 @@ int main(int argc, char** argv) {
             peers_str = argv[++i];
         else if (a == "--leader-addr" && i + 1 < argc)
             leader_addr = argv[++i];
+        else if (a == "--coordinator-addr" && i + 1 < argc)
+            coordinator_addr = argv[++i];
         else if (a == "--max-wal-lag-mb" && i + 1 < argc)
             max_wal_lag_mb = std::stoull(argv[++i]);
         else {
@@ -62,6 +65,7 @@ int main(int argc, char** argv) {
     node_cfg.max_wal_lag_bytes = max_wal_lag_mb * 1024ULL * 1024ULL;
     node_cfg.auth_token = token;
     node_cfg.leader_addr = leader_addr;
+    node_cfg.coordinator_addr = coordinator_addr;
 
     if (!role_str.empty()) {
         if (role_str == "coordinator") {

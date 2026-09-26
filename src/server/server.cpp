@@ -77,6 +77,23 @@ struct PendingSession {
                 continue;
             }
 
+            if (hdr.type == FrameType::NOTIFY_LEADER) {
+                if (coordinator && payload_len >= 4) {
+                    u16 olen = decode_u16(payload);
+                    if (payload_len >= static_cast<usize>(2 + olen + 2)) {
+                        std::string old_addr(reinterpret_cast<const char*>(payload + 2), olen);
+                        u16 nlen = decode_u16(payload + 2 + olen);
+                        if (payload_len >= static_cast<usize>(2 + olen + 2 + nlen)) {
+                            std::string new_addr(
+                                reinterpret_cast<const char*>(payload + 2 + olen + 2), nlen);
+                            coordinator->notify_leader(old_addr, new_addr);
+                        }
+                    }
+                }
+                buf.erase(buf.begin(), buf.begin() + static_cast<std::ptrdiff_t>(hdr.length));
+                continue;
+            }
+
             bool is_repl = (static_cast<u8>(hdr.type) >= static_cast<u8>(FrameType::REPL_HELLO));
             if (is_repl) {
                 repl_session = new ReplicationSession(repl_mgr, connection, api);
@@ -308,6 +325,9 @@ QUIC_STATUS QUIC_API Server::stream_cb_(HQUIC stream, void* ctx, QUIC_STREAM_EVE
                                        ev->RECEIVE.Buffers[i].Length);
             }
         }
+        break;
+    case QUIC_STREAM_EVENT_PEER_SEND_SHUTDOWN:
+        cctx->api->StreamShutdown(stream, QUIC_STREAM_SHUTDOWN_FLAG_GRACEFUL, 0);
         break;
     case QUIC_STREAM_EVENT_SEND_COMPLETE: {
         auto* qbuf = static_cast<QUIC_BUFFER*>(ev->SEND_COMPLETE.ClientContext);
