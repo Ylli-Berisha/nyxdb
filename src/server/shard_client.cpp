@@ -94,15 +94,18 @@ static Value decode_col_value(const byte* p, TypeId t, usize& off, usize avail) 
     }
 }
 
-} // anonymous namespace
+} // namespace
 
-Result<ExecuteResult> ShardClient::execute(const std::string& addr, const std::string& token,
-                                           const std::string& sql) {
+ShardClient::ShardClient(std::unique_ptr<replication::QuicClient> conn, std::string addr,
+                         std::string token)
+    : conn_(std::move(conn)), addr_(std::move(addr)), token_(std::move(token)) {}
+
+Result<ShardClient> ShardClient::connect(const std::string& addr, const std::string& token) {
     auto fq = std::make_shared<FrameQ>();
 
     auto cr = replication::QuicClient::create();
     if (!cr.is_ok())
-        return Result<ExecuteResult>::err("shard_client: create failed: " + cr.error().message);
+        return Result<ShardClient>::err("shard_client: create failed: " + cr.error().message);
 
     auto& client = *cr.value();
     client.set_frame_handler([fq](FrameType t, u32, const byte* d, usize l) {
@@ -113,7 +116,7 @@ Result<ExecuteResult> ShardClient::execute(const std::string& addr, const std::s
 
     auto [host, port] = replication::parse_node_addr(addr);
     if (client.connect(host, port).is_err())
-        return Result<ExecuteResult>::err("shard_client: connect to " + addr + " failed");
+        return Result<ShardClient>::err("shard_client: connect to " + addr + " failed");
 
     std::vector<byte> auth;
     encode_str(auth, token);
@@ -121,11 +124,22 @@ Result<ExecuteResult> ShardClient::execute(const std::string& addr, const std::s
 
     auto auth_r = fq->wait(std::chrono::seconds(5));
     if (!auth_r || auth_r->first != FrameType::AUTH_OK)
-        return Result<ExecuteResult>::err("shard_client: auth failed for " + addr);
+        return Result<ShardClient>::err("shard_client: auth failed for " + addr);
+
+    return Result<ShardClient>::ok(ShardClient(std::move(cr.value()), addr, token));
+}
+
+Result<ExecuteResult> ShardClient::execute(const std::string& sql) {
+    auto fq = std::make_shared<FrameQ>();
+    conn_->set_frame_handler([fq](FrameType t, u32, const byte* d, usize l) {
+        std::lock_guard<std::mutex> lk(fq->mu);
+        fq->q.push({t, std::vector<byte>(d, d + l)});
+        fq->cv.notify_one();
+    });
 
     std::vector<byte> qpay;
     encode_str(qpay, sql);
-    client.send_frame(FrameType::QUERY, 1, qpay);
+    conn_->send_frame(FrameType::QUERY, 1, qpay);
 
     ExecuteResult result;
     Schema& schema = result.schema;
@@ -134,11 +148,9 @@ Result<ExecuteResult> ShardClient::execute(const std::string& addr, const std::s
 
     while (!got_end) {
         auto fr = fq->wait(std::chrono::seconds(30));
-        if (!fr) {
-            client.close();
+        if (!fr)
             return Result<ExecuteResult>::err("shard_client: timeout waiting for result from " +
-                                              addr);
-        }
+                                              addr_);
 
         const auto& payload = fr->second;
         const byte* p = payload.data();
@@ -146,14 +158,11 @@ Result<ExecuteResult> ShardClient::execute(const std::string& addr, const std::s
 
         switch (fr->first) {
         case FrameType::QUERY_ERR: {
-            if (plen < 2) {
-                client.close();
+            if (plen < 2)
                 return Result<ExecuteResult>::err("shard query error");
-            }
             u16 mlen = decode_u16(p);
             std::string msg(reinterpret_cast<const char*>(p + 2),
                             std::min(static_cast<usize>(mlen), plen - 2));
-            client.close();
             return Result<ExecuteResult>::err(msg);
         }
         case FrameType::RESULT_META: {
@@ -194,11 +203,10 @@ Result<ExecuteResult> ShardClient::execute(const std::string& addr, const std::s
                 if (off >= plen)
                     break;
                 bool is_null = p[off++] != 0;
-                if (is_null) {
+                if (is_null)
                     result.columns[col_idx].push_back(std::monostate{});
-                } else {
+                else
                     result.columns[col_idx].push_back(decode_col_value(p, t, off, plen));
-                }
             }
             break;
         }
@@ -213,8 +221,16 @@ Result<ExecuteResult> ShardClient::execute(const std::string& addr, const std::s
         }
     }
 
-    client.close();
     return Result<ExecuteResult>::ok(std::move(result));
+}
+
+Result<void> ShardClient::reconnect() {
+    conn_->close();
+    auto r = ShardClient::connect(addr_, token_);
+    if (!r.is_ok())
+        return Result<void>::err(r.error().message);
+    *this = std::move(r.value());
+    return Result<void>::ok();
 }
 
 } // namespace nyx::server

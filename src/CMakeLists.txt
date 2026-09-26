@@ -48,6 +48,7 @@ add_library(nyxdb_server_lib STATIC
     server/wire.cpp
     server/session.cpp
     server/shard_client.cpp
+    server/shard_client_pool.cpp
     server/coordinator.cpp
     server/server.cpp
     server/replication_session.cpp

@@ -4,7 +4,6 @@
 #include "frontend/runner.h"
 #include "parser/lexer.h"
 #include "parser/parser.h"
-#include "server/shard_client.h"
 #include "storage/disk/shard_map_file.h"
 
 #include <filesystem>
@@ -16,7 +15,8 @@ namespace nyx::server {
 namespace fs = std::filesystem;
 
 Coordinator::Coordinator(Catalog cat, std::string token)
-    : catalog_(std::move(cat)), token_(std::move(token)) {}
+    : catalog_(std::move(cat)), token_(std::move(token)),
+      pool_(std::make_unique<ShardClientPool>()) {}
 
 Result<Coordinator> Coordinator::open(const std::string& data_root, std::string token) {
     fs::create_directories(data_root);
@@ -72,7 +72,7 @@ Result<ExecuteResult> Coordinator::execute(const std::string& sql) {
                 if (stmt.shard_map.has_value()) {
                     const auto& sm = *stmt.shard_map;
                     for (const auto& pd : sm.partitions) {
-                        auto sr = ShardClient::execute(pd.node_addr, token_, sql);
+                        auto sr = pool_->execute(pd.node_addr, token_, sql);
                         if (!sr.is_ok())
                             return Result<ExecuteResult>::err(
                                 "coordinator: CREATE TABLE on shard " + pd.node_addr + ": " +
@@ -85,7 +85,7 @@ Result<ExecuteResult> Coordinator::execute(const std::string& sql) {
                 const ShardMapMeta* sm = catalog_.shard_map_of(stmt.table_name);
                 if (sm) {
                     for (const auto& pd : sm->partitions) {
-                        ShardClient::execute(pd.node_addr, token_, sql);
+                        pool_->execute(pd.node_addr, token_, sql);
                     }
                 }
                 auto r = frontend::run_drop_table(catalog_, stmt);
@@ -100,7 +100,7 @@ Result<ExecuteResult> Coordinator::execute(const std::string& sql) {
                 const ShardMapMeta* sm = catalog_.shard_map_of(stmt.table_name);
                 if (sm) {
                     for (const auto& pd : sm->partitions)
-                        ShardClient::execute(pd.node_addr, token_, sql);
+                        pool_->execute(pd.node_addr, token_, sql);
                 }
                 return Result<ExecuteResult>::ok({});
 
@@ -139,7 +139,7 @@ Result<ExecuteResult> Coordinator::execute(const std::string& sql) {
 
                 if (sm) {
                     for (const auto& pd : sm->partitions)
-                        ShardClient::execute(pd.node_addr, token_, sql);
+                        pool_->execute(pd.node_addr, token_, sql);
                 }
                 return Result<ExecuteResult>::ok({});
             }
@@ -211,7 +211,7 @@ Result<ExecuteResult> Coordinator::route_insert_(const bound::BoundInsert& stmt,
             isql += ")";
         }
 
-        auto r = ShardClient::execute(addr, token_, isql);
+        auto r = pool_->execute(addr, token_, isql);
         if (!r.is_ok())
             return Result<ExecuteResult>::err("coordinator INSERT on shard " + addr + ": " +
                                               r.error().message);
@@ -238,7 +238,7 @@ Result<ExecuteResult> Coordinator::route_delete_(const bound::BoundDelete& /*stm
             if (already)
                 continue;
             visited.push_back(pd.node_addr);
-            auto r = ShardClient::execute(pd.node_addr, token_, sql);
+            auto r = pool_->execute(pd.node_addr, token_, sql);
             if (!r.is_ok())
                 return Result<ExecuteResult>::err("coordinator DELETE on shard " + pd.node_addr +
                                                   ": " + r.error().message);
@@ -266,7 +266,7 @@ Result<ExecuteResult> Coordinator::route_update_(const bound::BoundUpdate& /*stm
             if (already)
                 continue;
             visited.push_back(pd.node_addr);
-            auto r = ShardClient::execute(pd.node_addr, token_, sql);
+            auto r = pool_->execute(pd.node_addr, token_, sql);
             if (!r.is_ok())
                 return Result<ExecuteResult>::err("coordinator UPDATE on shard " + pd.node_addr +
                                                   ": " + r.error().message);
@@ -322,9 +322,8 @@ Result<ExecuteResult> Coordinator::fan_out_select_(const bound::BoundSelect& stm
     futures.reserve(target_shards.size());
     for (size_t idx : target_shards) {
         const std::string addr = sm.partitions[idx].node_addr;
-        const std::string tok = token_;
-        futures.push_back(std::async(std::launch::async, [addr, tok, &sql]() {
-            return ShardClient::execute(addr, tok, sql);
+        futures.push_back(std::async(std::launch::async, [addr, this, &sql]() {
+            return pool_->execute(addr, token_, sql);
         }));
     }
 
@@ -406,7 +405,7 @@ Coordinator::handle_alter_partition_(const bound::BoundAlterAddPartition& stmt) 
     }
     ct_sql += ")";
 
-    auto cr = ShardClient::execute(new_pd->node_addr, token_, ct_sql);
+    auto cr = pool_->execute(new_pd->node_addr, token_, ct_sql);
     if (!cr.is_ok())
         return Result<ExecuteResult>::err("alter_add_partition: CREATE TABLE on new shard: " +
                                           cr.error().message);
@@ -445,7 +444,7 @@ Coordinator::handle_alter_partition_(const bound::BoundAlterAddPartition& stmt) 
         if (!pred.empty()) {
             std::string sel = "SELECT * FROM " + stmt.table_name + " WHERE " +
                               new_sm.partition_col + " < " + pred;
-            auto rows_r = ShardClient::execute(src_pd->node_addr, token_, sel);
+            auto rows_r = pool_->execute(src_pd->node_addr, token_, sel);
             if (!rows_r.is_ok())
                 return Result<ExecuteResult>::err("alter_add_partition: SELECT migration rows: " +
                                                   rows_r.error().message);
@@ -487,14 +486,14 @@ Coordinator::handle_alter_partition_(const bound::BoundAlterAddPartition& stmt) 
                     }
                     ins += ")";
                 }
-                auto ir = ShardClient::execute(new_pd->node_addr, token_, ins);
+                auto ir = pool_->execute(new_pd->node_addr, token_, ins);
                 if (!ir.is_ok())
                     return Result<ExecuteResult>::err(
                         "alter_add_partition: INSERT migrated rows: " + ir.error().message);
 
                 std::string del = "DELETE FROM " + stmt.table_name + " WHERE " +
                                   new_sm.partition_col + " < " + pred;
-                ShardClient::execute(src_pd->node_addr, token_, del); // best-effort
+                pool_->execute(src_pd->node_addr, token_, del); // best-effort
             }
         }
     }

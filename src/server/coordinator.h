@@ -4,7 +4,9 @@
 #include "catalog/catalog.h"
 #include "common/result.h"
 #include "database/database.h"
+#include "server/shard_client_pool.h"
 
+#include <memory>
 #include <string>
 
 namespace nyx::server {
@@ -32,6 +34,7 @@ class Coordinator {
 
     Catalog catalog_;
     std::string token_;
+    std::unique_ptr<ShardClientPool> pool_;
 };
 
 } // namespace nyx::server
