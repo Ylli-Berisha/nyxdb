@@ -38,6 +38,7 @@ enum class FrameType : u8 {
     REPL_FORWARD_RESP = 0x41,
 
     NOTIFY_LEADER = 0x50,
+    REGISTER_NODE = 0x51,
 };
 
 struct FrameHeader {

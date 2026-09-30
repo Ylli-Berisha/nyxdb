@@ -12,20 +12,20 @@
 
 namespace nyx::server {
 
-class Coordinator {
+class ShardCoordinator {
   public:
-    static Result<Coordinator> open(const std::string& data_root, std::string token);
+    static Result<ShardCoordinator> open(const std::string& data_root, std::string token);
 
-    Coordinator(const Coordinator&) = delete;
-    Coordinator& operator=(const Coordinator&) = delete;
-    Coordinator(Coordinator&&) noexcept;
-    Coordinator& operator=(Coordinator&&) noexcept;
+    ShardCoordinator(const ShardCoordinator&) = delete;
+    ShardCoordinator& operator=(const ShardCoordinator&) = delete;
+    ShardCoordinator(ShardCoordinator&&) noexcept;
+    ShardCoordinator& operator=(ShardCoordinator&&) noexcept;
 
     Result<ExecuteResult> execute(const std::string& sql);
     void notify_leader(const std::string& old_addr, const std::string& new_addr);
 
   private:
-    explicit Coordinator(Catalog cat, std::string token);
+    explicit ShardCoordinator(Catalog cat, std::string token);
 
     Result<ExecuteResult> route_insert_(const bound::BoundInsert& stmt, const std::string& sql);
     Result<ExecuteResult> route_delete_(const bound::BoundDelete& stmt, const std::string& sql);

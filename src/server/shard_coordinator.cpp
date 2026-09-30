@@ -1,4 +1,4 @@
-#include "server/coordinator.h"
+#include "server/shard_coordinator.h"
 
 #include "binder/binder.h"
 #include "frontend/runner.h"
@@ -14,14 +14,14 @@ namespace nyx::server {
 
 namespace fs = std::filesystem;
 
-Coordinator::Coordinator(Catalog cat, std::string token)
+ShardCoordinator::ShardCoordinator(Catalog cat, std::string token)
     : catalog_(std::move(cat)), token_(std::move(token)),
       pool_(std::make_unique<ShardClientPool>()) {}
 
-Coordinator::Coordinator(Coordinator&& o) noexcept
+ShardCoordinator::ShardCoordinator(ShardCoordinator&& o) noexcept
     : catalog_(std::move(o.catalog_)), token_(std::move(o.token_)), pool_(std::move(o.pool_)) {}
 
-Coordinator& Coordinator::operator=(Coordinator&& o) noexcept {
+ShardCoordinator& ShardCoordinator::operator=(ShardCoordinator&& o) noexcept {
     if (this != &o) {
         catalog_ = std::move(o.catalog_);
         token_ = std::move(o.token_);
@@ -30,12 +30,12 @@ Coordinator& Coordinator::operator=(Coordinator&& o) noexcept {
     return *this;
 }
 
-Result<Coordinator> Coordinator::open(const std::string& data_root, std::string token) {
+Result<ShardCoordinator> ShardCoordinator::open(const std::string& data_root, std::string token) {
     fs::create_directories(data_root);
     auto cat = Catalog::load(data_root);
     if (!cat.is_ok())
-        return Result<Coordinator>::err(cat.error().message);
-    return Result<Coordinator>::ok(Coordinator(std::move(cat.value()), std::move(token)));
+        return Result<ShardCoordinator>::err(cat.error().message);
+    return Result<ShardCoordinator>::ok(ShardCoordinator(std::move(cat.value()), std::move(token)));
 }
 
 static ExecuteResult merge_results(std::vector<ExecuteResult> parts) {
@@ -54,7 +54,7 @@ static ExecuteResult merge_results(std::vector<ExecuteResult> parts) {
     return out;
 }
 
-Result<ExecuteResult> Coordinator::execute(const std::string& sql) {
+Result<ExecuteResult> ShardCoordinator::execute(const std::string& sql) {
     std::lock_guard<std::mutex> lk(mu_);
     Lexer lex(sql);
     auto toks = lex.tokenize();
@@ -160,8 +160,8 @@ Result<ExecuteResult> Coordinator::execute(const std::string& sql) {
         bound.value());
 }
 
-Result<ExecuteResult> Coordinator::route_insert_(const bound::BoundInsert& stmt,
-                                                 const std::string& /*sql*/) {
+Result<ExecuteResult> ShardCoordinator::route_insert_(const bound::BoundInsert& stmt,
+                                                      const std::string& /*sql*/) {
     const ShardMapMeta* sm = catalog_.shard_map_of(stmt.table_name);
     if (!sm)
         return Result<ExecuteResult>::err("route_insert: no shard map");
@@ -233,8 +233,8 @@ Result<ExecuteResult> Coordinator::route_insert_(const bound::BoundInsert& stmt,
     return Result<ExecuteResult>::ok({{}, {}, total});
 }
 
-Result<ExecuteResult> Coordinator::route_delete_(const bound::BoundDelete& /*stmt*/,
-                                                 const std::string& sql) {
+Result<ExecuteResult> ShardCoordinator::route_delete_(const bound::BoundDelete& /*stmt*/,
+                                                      const std::string& sql) {
     std::vector<std::string> visited;
     u64 total = 0;
     for (const auto& tname : catalog_.table_names()) {
@@ -261,8 +261,8 @@ Result<ExecuteResult> Coordinator::route_delete_(const bound::BoundDelete& /*stm
     return Result<ExecuteResult>::ok({{}, {}, total});
 }
 
-Result<ExecuteResult> Coordinator::route_update_(const bound::BoundUpdate& /*stmt*/,
-                                                 const std::string& sql) {
+Result<ExecuteResult> ShardCoordinator::route_update_(const bound::BoundUpdate& /*stmt*/,
+                                                      const std::string& sql) {
     u64 total = 0;
     std::vector<std::string> visited;
     for (const auto& tname : catalog_.table_names()) {
@@ -289,8 +289,9 @@ Result<ExecuteResult> Coordinator::route_update_(const bound::BoundUpdate& /*stm
     return Result<ExecuteResult>::ok({{}, {}, total});
 }
 
-Result<ExecuteResult> Coordinator::fan_out_select_(const bound::BoundSelect& stmt,
-                                                   const std::string& sql, const ShardMapMeta& sm) {
+Result<ExecuteResult> ShardCoordinator::fan_out_select_(const bound::BoundSelect& stmt,
+                                                        const std::string& sql,
+                                                        const ShardMapMeta& sm) {
     std::vector<size_t> target_shards;
     const bound::BoundExpr* where = stmt.where.get();
 
@@ -353,7 +354,7 @@ Result<ExecuteResult> Coordinator::fan_out_select_(const bound::BoundSelect& stm
 }
 
 Result<ExecuteResult>
-Coordinator::handle_alter_partition_(const bound::BoundAlterAddPartition& stmt) {
+ShardCoordinator::handle_alter_partition_(const bound::BoundAlterAddPartition& stmt) {
 
     const ShardMapMeta& new_sm = stmt.updated_shard_map;
 
@@ -518,7 +519,7 @@ Coordinator::handle_alter_partition_(const bound::BoundAlterAddPartition& stmt) 
     return Result<ExecuteResult>::ok({});
 }
 
-void Coordinator::notify_leader(const std::string& old_addr, const std::string& new_addr) {
+void ShardCoordinator::notify_leader(const std::string& old_addr, const std::string& new_addr) {
     std::lock_guard<std::mutex> lk(mu_);
     for (const auto& tname : catalog_.table_names()) {
         const ShardMapMeta* sm = catalog_.shard_map_of(tname);
