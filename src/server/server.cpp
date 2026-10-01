@@ -1,8 +1,8 @@
 #include "server/server.h"
 
-#include "server/coordinator.h"
 #include "server/replication_session.h"
 #include "server/session.h"
+#include "server/shard_coordinator.h"
 
 #include <cstdlib>
 #include <cstring>
@@ -22,7 +22,8 @@ struct PendingSession {
     ReplicationSession* repl_session = nullptr;
 
     Database* db;
-    Coordinator* coordinator;
+    ShardCoordinator* shard_coordinator;
+    ReplicaCoordinator* replica_coordinator;
     const std::string* token;
     const QUIC_API_TABLE* api;
     replication::ReplicationManager* repl_mgr;
@@ -78,7 +79,7 @@ struct PendingSession {
             }
 
             if (hdr.type == FrameType::NOTIFY_LEADER) {
-                if (coordinator && payload_len >= 4) {
+                if (payload_len >= 4) {
                     u16 olen = decode_u16(payload);
                     if (payload_len >= static_cast<usize>(2 + olen + 2)) {
                         std::string old_addr(reinterpret_cast<const char*>(payload + 2), olen);
@@ -86,8 +87,24 @@ struct PendingSession {
                         if (payload_len >= static_cast<usize>(2 + olen + 2 + nlen)) {
                             std::string new_addr(
                                 reinterpret_cast<const char*>(payload + 2 + olen + 2), nlen);
-                            coordinator->notify_leader(old_addr, new_addr);
+                            if (shard_coordinator)
+                                shard_coordinator->notify_leader(old_addr, new_addr);
+                            if (replica_coordinator)
+                                replica_coordinator->notify_leader(old_addr, new_addr);
                         }
+                    }
+                }
+                buf.erase(buf.begin(), buf.begin() + static_cast<std::ptrdiff_t>(hdr.length));
+                continue;
+            }
+
+            if (hdr.type == FrameType::REGISTER_NODE) {
+                if (replica_coordinator && payload_len >= 3) {
+                    u16 alen = decode_u16(payload);
+                    if (payload_len >= static_cast<usize>(2 + alen + 1)) {
+                        std::string addr(reinterpret_cast<const char*>(payload + 2), alen);
+                        bool is_leader = (payload[2 + alen] != 0);
+                        replica_coordinator->register_node(addr, is_leader);
                     }
                 }
                 buf.erase(buf.begin(), buf.begin() + static_cast<std::ptrdiff_t>(hdr.length));
@@ -101,8 +118,9 @@ struct PendingSession {
                 repl_session->on_data(buf.data(), buf.size());
                 buf.clear();
             } else {
-                client_session = new Session(db, *token, connection, api, repl_mgr,
-                                             /*pre_authed=*/true, coordinator);
+                client_session =
+                    new Session(db, *token, connection, api, repl_mgr,
+                                /*pre_authed=*/true, shard_coordinator, replica_coordinator);
                 client_session->on_stream(stream);
                 client_session->on_data(buf.data(), buf.size());
                 buf.clear();
@@ -126,7 +144,8 @@ struct PendingSession {
 
 struct ConnectionCtx {
     Database* db;
-    Coordinator* coordinator;
+    ShardCoordinator* shard_coordinator;
+    ReplicaCoordinator* replica_coordinator;
     const std::string* token;
     const QUIC_API_TABLE* api;
     replication::ReplicationManager* repl_mgr;
@@ -185,11 +204,13 @@ Result<Server> Server::create(const std::string& data_dir, u16 port, const std::
     if (QUIC_FAILED(s.api_->ConfigurationLoadCredential(s.configuration_, &server_cred)))
         return Result<Server>::err("ConfigurationLoadCredential failed");
 
-    if (node_cfg.role == replication::NodeConfig::Role::Coordinator) {
-        auto coord_r = Coordinator::open(data_dir, token);
+    if (node_cfg.role == replication::NodeConfig::Role::ShardCoordinator) {
+        auto coord_r = ShardCoordinator::open(data_dir, token);
         if (!coord_r.is_ok())
-            return Result<Server>::err("Coordinator::open: " + coord_r.error().message);
-        s.coordinator_ = std::make_unique<Coordinator>(std::move(coord_r.value()));
+            return Result<Server>::err("ShardCoordinator::open: " + coord_r.error().message);
+        s.shard_coordinator_ = std::make_unique<ShardCoordinator>(std::move(coord_r.value()));
+    } else if (node_cfg.role == replication::NodeConfig::Role::ReplicaCoordinator) {
+        s.replica_coordinator_ = std::make_unique<ReplicaCoordinator>(token);
     } else {
         auto db_r = Database::open(data_dir);
         if (!db_r.is_ok())
@@ -247,8 +268,10 @@ Server::~Server() {
 
 Server::Server(Server&& o) noexcept
     : api_(o.api_), registration_(o.registration_), configuration_(o.configuration_),
-      listener_(o.listener_), db_(std::move(o.db_)), coordinator_(std::move(o.coordinator_)),
-      repl_mgr_(std::move(o.repl_mgr_)), token_(std::move(o.token_)), port_(o.port_) {
+      listener_(o.listener_), db_(std::move(o.db_)),
+      shard_coordinator_(std::move(o.shard_coordinator_)),
+      replica_coordinator_(std::move(o.replica_coordinator_)), repl_mgr_(std::move(o.repl_mgr_)),
+      token_(std::move(o.token_)), port_(o.port_) {
     o.api_ = nullptr;
     o.registration_ = nullptr;
     o.configuration_ = nullptr;
@@ -270,7 +293,8 @@ QUIC_STATUS QUIC_API Server::listener_cb_(HQUIC, void* ctx, QUIC_LISTENER_EVENT*
 
         auto* cctx = new ConnectionCtx;
         cctx->db = self->db_.get();
-        cctx->coordinator = self->coordinator_.get();
+        cctx->shard_coordinator = self->shard_coordinator_.get();
+        cctx->replica_coordinator = self->replica_coordinator_.get();
         cctx->token = &self->token_;
         cctx->api = self->api_;
         cctx->repl_mgr = self->repl_mgr_.get();
@@ -291,7 +315,8 @@ QUIC_STATUS QUIC_API Server::connection_cb_(HQUIC conn, void* ctx, QUIC_CONNECTI
         HQUIC stream = ev->PEER_STREAM_STARTED.Stream;
         cctx->pending = new PendingSession;
         cctx->pending->db = cctx->db;
-        cctx->pending->coordinator = cctx->coordinator;
+        cctx->pending->shard_coordinator = cctx->shard_coordinator;
+        cctx->pending->replica_coordinator = cctx->replica_coordinator;
         cctx->pending->token = cctx->token;
         cctx->pending->api = cctx->api;
         cctx->pending->repl_mgr = cctx->repl_mgr;

@@ -10,9 +10,11 @@ static void usage(const char* argv0) {
     std::cerr << "usage: " << argv0
               << " --data-dir <path> --token <secret>"
                  " [--port <n>] [--log-level <level>]"
+                 " [--role coordinator|read-coordinator]"
                  " [--node-id <id> --role leader|follower"
                  " --peers <addr:port,...>"
-                 " [--leader-addr <host:port>] [--max-wal-lag-mb <n>]]\n";
+                 " [--leader-addr <host:port>] [--coordinator-addr <host:port>]"
+                 " [--read-coordinator-addr <host:port>] [--max-wal-lag-mb <n>]]\n";
 }
 
 int main(int argc, char** argv) {
@@ -24,7 +26,8 @@ int main(int argc, char** argv) {
     std::string role_str;
     std::string peers_str;
     std::string leader_addr;
-    std::string coordinator_addr;
+    std::string shard_coordinator_addr;
+    std::string replica_coordinator_addr;
     uint64_t max_wal_lag_mb = 4096;
 
     for (int i = 1; i < argc; ++i) {
@@ -46,7 +49,9 @@ int main(int argc, char** argv) {
         else if (a == "--leader-addr" && i + 1 < argc)
             leader_addr = argv[++i];
         else if (a == "--coordinator-addr" && i + 1 < argc)
-            coordinator_addr = argv[++i];
+            shard_coordinator_addr = argv[++i];
+        else if (a == "--read-coordinator-addr" && i + 1 < argc)
+            replica_coordinator_addr = argv[++i];
         else if (a == "--max-wal-lag-mb" && i + 1 < argc)
             max_wal_lag_mb = std::stoull(argv[++i]);
         else {
@@ -65,11 +70,14 @@ int main(int argc, char** argv) {
     node_cfg.max_wal_lag_bytes = max_wal_lag_mb * 1024ULL * 1024ULL;
     node_cfg.auth_token = token;
     node_cfg.leader_addr = leader_addr;
-    node_cfg.coordinator_addr = coordinator_addr;
+    node_cfg.shard_coordinator_addr = shard_coordinator_addr;
+    node_cfg.replica_coordinator_addr = replica_coordinator_addr;
 
     if (!role_str.empty()) {
         if (role_str == "coordinator") {
-            node_cfg.role = nyx::replication::NodeConfig::Role::Coordinator;
+            node_cfg.role = nyx::replication::NodeConfig::Role::ShardCoordinator;
+        } else if (role_str == "read-coordinator") {
+            node_cfg.role = nyx::replication::NodeConfig::Role::ReplicaCoordinator;
         } else {
             if (node_id.empty() || peers_str.empty()) {
                 std::cerr << "error: --node-id and --peers are required when --role is set\n";
@@ -81,7 +89,8 @@ int main(int argc, char** argv) {
             else if (role_str == "follower")
                 node_cfg.role = nyx::replication::NodeConfig::Role::Follower;
             else {
-                std::cerr << "error: --role must be leader, follower, or coordinator\n";
+                std::cerr
+                    << "error: --role must be leader, follower, coordinator, or read-coordinator\n";
                 return 1;
             }
             std::string peer;

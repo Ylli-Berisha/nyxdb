@@ -11,7 +11,13 @@ namespace nyx::replication {
 
 struct NodeConfig {
     std::string node_id;
-    enum class Role { Standalone, Leader, Follower, Coordinator } role = Role::Standalone;
+    enum class Role {
+        Standalone,
+        Leader,
+        Follower,
+        ShardCoordinator,
+        ReplicaCoordinator
+    } role = Role::Standalone;
     std::vector<std::string> peer_addrs;
     u16 port = 4433;
     u64 max_wal_lag_bytes = 4ULL * 1024 * 1024 * 1024;
@@ -20,7 +26,8 @@ struct NodeConfig {
     u32 election_timeout_min_ms = 3000;
     u32 election_timeout_max_ms = 5000;
     u32 heartbeat_interval_ms = 1000;
-    std::string coordinator_addr;
+    std::string shard_coordinator_addr;
+    std::string replica_coordinator_addr;
 };
 
 inline std::pair<std::string, u16> parse_node_addr(const std::string& addr) {

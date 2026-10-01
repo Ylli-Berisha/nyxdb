@@ -1,7 +1,8 @@
 #include "server/session.h"
 
 #include "replication/replication_manager.h"
-#include "server/coordinator.h"
+#include "server/replica_coordinator.h"
+#include "server/shard_coordinator.h"
 
 #include <cctype>
 #include <cstring>
@@ -76,9 +77,10 @@ static void send_result_to_stream(HQUIC stream, const QUIC_API_TABLE* tbl, u32 q
 
 Session::Session(Database* db, std::string token, HQUIC connection, const QUIC_API_TABLE* api,
                  replication::ReplicationManager* repl_mgr, bool pre_authed,
-                 Coordinator* coordinator)
-    : db_(db), coordinator_(coordinator), token_(std::move(token)), connection_(connection),
-      api_(api), repl_mgr_(repl_mgr), authed_(pre_authed) {}
+                 ShardCoordinator* shard_coordinator, ReplicaCoordinator* replica_coordinator)
+    : db_(db), shard_coordinator_(shard_coordinator), replica_coordinator_(replica_coordinator),
+      token_(std::move(token)), connection_(connection), api_(api), repl_mgr_(repl_mgr),
+      authed_(pre_authed) {}
 
 void Session::on_stream(HQUIC stream) {
     stream_ = stream;
@@ -202,8 +204,27 @@ void Session::handle_query_(const byte* payload, usize payload_len, u32 qid) {
         return;
     }
 
-    if (coordinator_) {
-        auto* coord = coordinator_;
+    if (replica_coordinator_) {
+        auto* rc = replica_coordinator_;
+        HQUIC stream = stream_;
+        const QUIC_API_TABLE* tbl = api_;
+        std::thread([rc, stream, tbl, qid, sql = std::move(sql)]() {
+            auto r = rc->execute(sql);
+            if (!r.is_ok()) {
+                std::string_view msg = r.error().message;
+                std::vector<byte> buf;
+                encode_header(buf, FrameType::QUERY_ERR, qid, static_cast<u32>(2 + msg.size()));
+                encode_str(buf, msg);
+                stream_send(stream, tbl, std::move(buf));
+                return;
+            }
+            send_result_to_stream(stream, tbl, qid, r.value());
+        }).detach();
+        return;
+    }
+
+    if (shard_coordinator_) {
+        auto* coord = shard_coordinator_;
         HQUIC stream = stream_;
         const QUIC_API_TABLE* tbl = api_;
         std::thread([coord, stream, tbl, qid, sql = std::move(sql)]() {

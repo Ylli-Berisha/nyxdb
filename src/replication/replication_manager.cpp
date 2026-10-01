@@ -47,6 +47,36 @@ void ReplicationManager::start() {
     }
 
     election_->start();
+
+    if (!config_.replica_coordinator_addr.empty()) {
+        std::string my_addr = "127.0.0.1:" + std::to_string(config_.port);
+        bool is_ldr = (config_.role == Role::Leader);
+        std::string rc_addr = config_.replica_coordinator_addr;
+        std::string tok = config_.auth_token;
+        std::thread([my_addr, is_ldr, rc_addr, tok]() {
+            for (int attempt = 0; attempt < 5; ++attempt) {
+                auto cr = QuicClient::create();
+                if (!cr.is_ok()) {
+                    std::this_thread::sleep_for(std::chrono::seconds(1));
+                    continue;
+                }
+                auto [host, port] = parse_node_addr(rc_addr);
+                if (cr.value()->connect(host, port).is_err()) {
+                    std::this_thread::sleep_for(std::chrono::seconds(1));
+                    continue;
+                }
+                std::vector<byte> auth_pay;
+                server::encode_str(auth_pay, tok);
+                cr.value()->send_frame(server::FrameType::AUTH_REQ, 1, auth_pay);
+                std::vector<byte> pay;
+                server::encode_str(pay, my_addr);
+                server::encode_u8(pay, is_ldr ? 1u : 0u);
+                cr.value()->send_frame(server::FrameType::REGISTER_NODE, 1, pay);
+                cr.value()->drain(std::chrono::milliseconds(500));
+                return;
+            }
+        }).detach();
+    }
 }
 
 void ReplicationManager::stop() {
@@ -65,10 +95,10 @@ void ReplicationManager::become_leader_() {
         consumer_->stop();
     leader_.store(true);
 
-    if (!config_.coordinator_addr.empty() && !config_.leader_addr.empty()) {
+    if (!config_.shard_coordinator_addr.empty() && !config_.leader_addr.empty()) {
         std::string old_addr = config_.leader_addr;
         std::string new_addr = "127.0.0.1:" + std::to_string(config_.port);
-        std::string coord = config_.coordinator_addr;
+        std::string coord = config_.shard_coordinator_addr;
         std::string tok = config_.auth_token;
         std::thread([old_addr, new_addr, coord, tok]() {
             for (int attempt = 0; attempt < 5; ++attempt) {
@@ -78,6 +108,36 @@ void ReplicationManager::become_leader_() {
                     continue;
                 }
                 auto [host, port] = parse_node_addr(coord);
+                if (cr.value()->connect(host, port).is_err()) {
+                    std::this_thread::sleep_for(std::chrono::seconds(1));
+                    continue;
+                }
+                std::vector<byte> auth_pay;
+                server::encode_str(auth_pay, tok);
+                cr.value()->send_frame(server::FrameType::AUTH_REQ, 1, auth_pay);
+                std::vector<byte> pay;
+                server::encode_str(pay, old_addr);
+                server::encode_str(pay, new_addr);
+                cr.value()->send_frame(server::FrameType::NOTIFY_LEADER, 1, pay);
+                cr.value()->drain(std::chrono::milliseconds(500));
+                return;
+            }
+        }).detach();
+    }
+
+    if (!config_.replica_coordinator_addr.empty()) {
+        std::string old_addr = config_.leader_addr;
+        std::string new_addr = "127.0.0.1:" + std::to_string(config_.port);
+        std::string rc_addr = config_.replica_coordinator_addr;
+        std::string tok = config_.auth_token;
+        std::thread([old_addr, new_addr, rc_addr, tok]() {
+            for (int attempt = 0; attempt < 5; ++attempt) {
+                auto cr = QuicClient::create();
+                if (!cr.is_ok()) {
+                    std::this_thread::sleep_for(std::chrono::seconds(1));
+                    continue;
+                }
+                auto [host, port] = parse_node_addr(rc_addr);
                 if (cr.value()->connect(host, port).is_err()) {
                     std::this_thread::sleep_for(std::chrono::seconds(1));
                     continue;

@@ -76,3 +76,7 @@ add_test(NAME session_logic_test COMMAND session_logic_test)
 add_executable(replication_session_test server/replication_session_test.cpp)
 target_link_libraries(replication_session_test PRIVATE nyxdb_server_lib GTest::gtest_main)
 add_test(NAME replication_session_test COMMAND replication_session_test)
+
+add_executable(replica_coordinator_test server/replica_coordinator_test.cpp)
+target_link_libraries(replica_coordinator_test PRIVATE nyxdb_server_lib GTest::gtest_main)
+add_test(NAME replica_coordinator_test COMMAND replica_coordinator_test)

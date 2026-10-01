@@ -1,6 +1,6 @@
 # nyxdb
 
-A columnar analytical database written from scratch in C++17. Persistent immutable segment storage, a write-ahead log, B+ tree indexes, PRIMARY KEY / UNIQUE constraints, leader-follower replication over QUIC, horizontal range sharding with automatic leader-failover notification, and a background merge + vacuum engine.
+A columnar analytical database written from scratch in C++17. Persistent immutable segment storage, a write-ahead log, B+ tree indexes, PRIMARY KEY / UNIQUE constraints, leader-follower replication over QUIC, horizontal range sharding, per-shard replica coordinators for read scaling, and a background merge + vacuum engine.
 
 ---
 
@@ -13,6 +13,7 @@ A columnar analytical database written from scratch in C++17. Persistent immutab
 - [Server Mode](#server-mode)
 - [Replication](#replication)
 - [Sharding](#sharding)
+- [Read Scaling](#read-scaling)
 - [Storage Internals](#storage-internals)
 - [Building](#building)
 - [Testing](#testing)
@@ -32,7 +33,8 @@ A columnar analytical database written from scratch in C++17. Persistent immutab
 | **Query engine** | Volcano-model executor: `TableScan`, `IndexScan`, `Filter`, `Project`, `Sort`, `Limit`, `HashAggregate`, `HashJoin` (equi-join only) |
 | **Server** | QUIC transport (msquic), binary frame protocol, token authentication |
 | **Replication** | Leader-follower, Raft-like election, WAL streaming, snapshot bootstrap |
-| **Sharding** | Range-based horizontal partitioning, coordinator node routes SQL, automatic leader-failover notification |
+| **Sharding** | Range-based horizontal partitioning, shard coordinator routes SQL, automatic leader-failover notification |
+| **Read scaling** | `ReplicaCoordinator` proxy per shard group; SELECTs are round-robin distributed across all replicas, writes forwarded to the current leader |
 | **Language** | C++17, ASan + UBSan in debug builds |
 
 ---
@@ -327,6 +329,8 @@ Frames have a 9-byte header (`u32` length, `u8` type, `u32` query-id) followed b
 | `RESULT_COL` | server → client | One column's data, all rows |
 | `RESULT_END` | server → client | Query complete, `rows_affected` count |
 | `QUERY_ERR` | server → client | Error message |
+| `NOTIFY_LEADER` | node → coordinator/replica-coord | Signals a leader change; payload carries old and new `host:port` |
+| `REGISTER_NODE` | node → replica-coord | Registers a node's address and whether it is the current leader |
 
 ---
 
@@ -374,7 +378,8 @@ nyxdb supports asynchronous leader-follower replication. The leader streams its 
 | `--peers` | Comma-separated `host:port` list of all nodes including self |
 | `--leader-addr` | Current leader address (followers only, used for initial WAL pull) |
 | `--max-wal-lag-mb` | Max WAL lag before a follower is considered stale (default 4096 MB) |
-| `--coordinator-addr` | Coordinator address; when set the node notifies the coordinator on promotion |
+| `--coordinator-addr` | Shard coordinator address; when set the node sends `NOTIFY_LEADER` to the coordinator on promotion |
+| `--read-coordinator-addr` | Replica coordinator address; when set the node registers itself on startup and notifies the replica coordinator on promotion |
 
 ### How it works
 
@@ -388,7 +393,7 @@ nyxdb supports asynchronous leader-follower replication. The leader streams its 
 
 ## Sharding
 
-nyxdb supports horizontal range sharding. A coordinator node holds the partition map and routes SQL to the appropriate shard nodes. Each shard can itself be a replicated leader-follower pair.
+nyxdb supports horizontal range sharding. A shard coordinator node holds the partition map and routes SQL to the appropriate shard nodes. Each shard can itself be a replicated leader-follower pair.
 
 ### Topology
 
@@ -396,7 +401,7 @@ nyxdb supports horizontal range sharding. A coordinator node holds the partition
 clients
    │
    ▼
-coordinator  (--role coordinator)
+shard-coordinator  (--role coordinator)
    │   routes INSERT/SELECT/UPDATE/DELETE by partition key range
    ├── shard-0-leader   (--role leader)
    │   └── shard-0-follower (--role follower)
@@ -418,7 +423,7 @@ PARTITION BY RANGE (id) (
 );
 ```
 
-The coordinator stores the partition map, propagates `CREATE TABLE` to every shard node, and from then on routes every write and read to the correct shard automatically. A `SELECT` without a partition-key predicate fans out to all shards and merges the results.
+The shard coordinator stores the partition map, propagates `CREATE TABLE` to every shard node, and from then on routes every write and read to the correct shard automatically. A `SELECT` without a partition-key predicate fans out to all shards and merges the results.
 
 ### Start a sharded cluster with replication
 
@@ -475,12 +480,97 @@ The coordinator stores the partition map, propagates `CREATE TABLE` to every sha
 
 | Flag | Description |
 |---|---|
-| `--role coordinator` | Node acts as coordinator; no local database, routes all SQL |
-| `--coordinator-addr` | Address of the coordinator (shard nodes only); enables failover notification |
+| `--role coordinator` | Node acts as shard coordinator; no local database, routes all SQL |
+| `--coordinator-addr` | Address of the shard coordinator (shard nodes only); enables failover notification |
 
 ### Automatic leader failover
 
-When a shard follower wins an election it sends a `NOTIFY_LEADER` frame to the coordinator. The coordinator updates the affected partition addresses in-place and evicts the stale shard connection from its pool. Subsequent writes to that partition are routed to the new leader without operator intervention or restart.
+When a shard follower wins an election it sends a `NOTIFY_LEADER` frame to the shard coordinator (and to the replica coordinator if `--read-coordinator-addr` is set). The coordinator updates the affected partition addresses in-place and evicts the stale shard connection from its pool. Subsequent writes to that partition are routed to the new leader without operator intervention or restart.
+
+---
+
+## Read Scaling
+
+A `ReplicaCoordinator` (`--role read-coordinator`) is a lightweight proxy that sits between the shard coordinator and a shard's replica set. It holds a list of all registered nodes and their roles, distributes `SELECT` queries round-robin across every replica, and forwards writes to the current leader. The shard coordinator's partition map stores the replica coordinator address; it never needs to know which node is the leader.
+
+### Topology with read scaling
+
+```
+clients
+   │
+   ▼
+shard-coordinator  (--role coordinator)
+   │
+   ├── replica-coordinator-0  (--role read-coordinator)
+   │       ├── shard-0-leader   (--role leader)
+   │       └── shard-0-follower (--role follower)
+   └── replica-coordinator-1  (--role read-coordinator)
+           ├── shard-1-leader   (--role leader)
+           └── shard-1-follower (--role follower)
+```
+
+### Create a sharded table routed through replica coordinators
+
+```sql
+-- Partition addresses now point to the replica coordinators, not the shard leaders
+CREATE TABLE orders (
+    id    INT    NOT NULL,
+    price DOUBLE
+)
+PARTITION BY RANGE (id) (
+    PARTITION p0 VALUES LESS THAN (1000) ON '127.0.0.1:4437',
+    PARTITION p1 VALUES LESS THAN (MAXVALUE) ON '127.0.0.1:4438'
+);
+```
+
+### Start a cluster with replica coordinators
+
+```bash
+# Replica coordinator — shard 0
+./build/nyxdb_server \
+    --data-dir /data/rc0 \
+    --token    shardtoken \
+    --port     4437 \
+    --role     read-coordinator
+
+# Replica coordinator — shard 1
+./build/nyxdb_server \
+    --data-dir /data/rc1 \
+    --token    shardtoken \
+    --port     4438 \
+    --role     read-coordinator
+
+# Shard 0 — leader (registers with rc0 and notifies it on promotion)
+./build/nyxdb_server \
+    --data-dir /data/s0-leader \
+    --token    shardtoken \
+    --port     4433 \
+    --role     leader \
+    --node-id  127.0.0.1 \
+    --peers    127.0.0.1:4433,127.0.0.2:4434 \
+    --coordinator-addr       127.0.0.1:4440 \
+    --read-coordinator-addr  127.0.0.1:4437
+
+# Shard 0 — follower
+./build/nyxdb_server \
+    --data-dir /data/s0-follower \
+    --token    shardtoken \
+    --port     4434 \
+    --role     follower \
+    --node-id  127.0.0.2 \
+    --peers    127.0.0.1:4433,127.0.0.2:4434 \
+    --leader-addr            127.0.0.1:4433 \
+    --read-coordinator-addr  127.0.0.1:4437
+
+# Shard 1 and coordinator started similarly...
+```
+
+Each shard node sends a `REGISTER_NODE` frame to its replica coordinator on startup, declaring its address and whether it is currently the leader. On leader election, the new leader sends `NOTIFY_LEADER` to both the shard coordinator and the replica coordinator so both are updated atomically.
+
+| Flag | Description |
+|---|---|
+| `--role read-coordinator` | Node acts as replica coordinator; no local database, proxies reads and writes |
+| `--read-coordinator-addr` | Replica coordinator address (shard nodes only); the node registers on startup and sends `NOTIFY_LEADER` on promotion |
 
 ---
 
@@ -580,7 +670,7 @@ ctest --test-dir build --output-on-failure -j$(nproc)
 ctest --test-dir build -R vacuum_test --output-on-failure
 ```
 
-There are 63 test suites spanning every layer:
+There are 65 test suites spanning every layer:
 
 | Layer | Suites |
 |---|---|
@@ -595,7 +685,7 @@ There are 63 test suites spanning every layer:
 | Database | `database`, `database_segment`, `database_wal`, `database_index`, `database_constraint`, `vacuum` |
 | Catalog | `catalog` |
 | Replication | `follower_registry`, `wal_streamer` |
-| Server | `wire`, `session_logic`, `replication_session` |
-| Integration | `scan_e2e`, `pipeline_e2e`, `server`, `replication`, `replication_mp`, `sharding_mp`, `sharding_replication_mp` |
+| Server | `wire`, `session_logic`, `replication_session`, `replica_coordinator` |
+| Integration | `scan_e2e`, `pipeline_e2e`, `server`, `replication`, `replication_mp`, `sharding_mp`, `sharding_replication_mp`, `replica_coordinator_mp` |
 
-The `replication_mp` suite spawns real server processes with `fork`/`exec` and exercises leader election, write forwarding, crash recovery, and follower rejoin using `SIGTERM`/`SIGKILL`. The `sharding_replication_mp` suite combines both layers: it runs a full coordinator + two replicated shard pairs and verifies that a leader failover triggers a `NOTIFY_LEADER` frame that updates the coordinator's partition map so subsequent writes route to the newly elected leader.
+The `replication_mp` suite spawns real server processes with `fork`/`exec` and exercises leader election, write forwarding, crash recovery, and follower rejoin using `SIGTERM`/`SIGKILL`. The `sharding_replication_mp` suite combines both layers: it runs a full shard coordinator + two replicated shard pairs and verifies that a leader failover triggers a `NOTIFY_LEADER` frame that updates the coordinator's partition map so subsequent writes route to the newly elected leader. The `replica_coordinator_mp` suite adds two `ReplicaCoordinator` processes and verifies round-robin read distribution across replicas, write routing to the leader, and that leader failover propagates to both the shard coordinator and the replica coordinator.
