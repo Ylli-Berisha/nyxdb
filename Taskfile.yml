@@ -1,0 +1,202 @@
+version: '3'
+
+vars:
+  BIN: './build/nyxdb_server'
+  DATA: '/tmp/nyxdb'
+  TOKEN: 'devtoken'
+  IMAGE: 'nyxdb'
+
+tasks:
+
+  build:
+    desc: Configure and compile in Release mode
+    cmds:
+      - cmake -B build -DCMAKE_BUILD_TYPE=Release
+      - cmake --build build -j$(nproc)
+
+  format:
+    desc: Format all C++ sources with clang-format
+    cmds:
+      - find src tests -name '*.cpp' -o -name '*.h' | xargs clang-format -i
+
+  docker-build:
+    desc: Build the Docker image  (IMAGE=name:tag)
+    cmds:
+      - docker build -t {{.IMAGE}} .
+
+  docker-push:
+    desc: Push the Docker image to a registry  (IMAGE=registry/name:tag)
+    cmds:
+      - docker push {{.IMAGE}}
+
+  test:
+    desc: Run all tests  (FILTER=<regex> to run a subset)
+    vars:
+      FILTER: '{{default ".*" .FILTER}}'
+    cmds:
+      - ctest --test-dir build -R '{{.FILTER}}' --output-on-failure -j$(nproc)
+
+  start:
+    desc: Start a standalone server on port 4433  (TOKEN, DATA overridable)
+    cmds:
+      - mkdir -p {{.DATA}}/standalone
+      - >-
+        {{.BIN}}
+        --data-dir {{.DATA}}/standalone
+        --token    {{.TOKEN}}
+        --port     4433
+
+  start-replica-cluster:
+    desc: |
+      Start a leader/follower cluster.
+        NODES=3       total nodes (first is leader, rest are followers)
+        BASE_PORT=5001 first node's port; subsequent nodes increment by 1
+    vars:
+      NODES: '{{default "3" .NODES}}'
+      BASE_PORT: '{{default "5001" .BASE_PORT}}'
+    cmds:
+      - rm -rf {{.DATA}}/replica && mkdir -p {{.DATA}}/replica
+      - |
+        BIN={{.BIN}}
+        DATA={{.DATA}}
+        TOKEN={{.TOKEN}}
+        NODES={{.NODES}}
+        BASE_PORT={{.BASE_PORT}}
+
+        PEERS=""
+        for i in $(seq 1 $NODES); do
+          PORT=$((BASE_PORT + i - 1))
+          [ -n "$PEERS" ] && PEERS="$PEERS,"
+          PEERS="${PEERS}127.0.0.${i}:${PORT}"
+        done
+
+        trap 'kill $(jobs -p) 2>/dev/null' EXIT INT TERM
+
+        for i in $(seq 1 $NODES); do
+          PORT=$((BASE_PORT + i - 1))
+          DIR=$DATA/replica/node-$i
+          mkdir -p $DIR
+          if [ $i -eq 1 ]; then
+            $BIN --data-dir $DIR --token $TOKEN --port $PORT --log-level error \
+              --role leader --node-id 127.0.0.$i --peers $PEERS &
+          else
+            $BIN --data-dir $DIR --token $TOKEN --port $PORT --log-level error \
+              --role follower --node-id 127.0.0.$i --peers $PEERS \
+              --leader-addr 127.0.0.1:$BASE_PORT &
+          fi
+        done
+
+        echo "replica cluster up — $NODES nodes, leader :$BASE_PORT"
+        wait
+
+  start-shard-cluster:
+    desc: |
+      Start a shard coordinator + standalone shard nodes.
+        SHARDS=2        number of shard nodes
+        BASE_PORT=5010  coordinator port; shards start at BASE_PORT+1
+    vars:
+      SHARDS: '{{default "2" .SHARDS}}'
+      BASE_PORT: '{{default "5010" .BASE_PORT}}'
+    cmds:
+      - rm -rf {{.DATA}}/shard && mkdir -p {{.DATA}}/shard
+      - |
+        BIN={{.BIN}}
+        DATA={{.DATA}}
+        TOKEN={{.TOKEN}}
+        SHARDS={{.SHARDS}}
+        BASE_PORT={{.BASE_PORT}}
+
+        trap 'kill $(jobs -p) 2>/dev/null' EXIT INT TERM
+
+        mkdir -p $DATA/shard/coord
+        $BIN --data-dir $DATA/shard/coord --token $TOKEN --port $BASE_PORT \
+          --log-level error --role coordinator &
+
+        for s in $(seq 1 $SHARDS); do
+          PORT=$((BASE_PORT + s))
+          mkdir -p $DATA/shard/s$s
+          $BIN --data-dir $DATA/shard/s$s --token $TOKEN --port $PORT \
+            --log-level error &
+        done
+
+        echo "shard cluster up — coordinator :$BASE_PORT  shards :$((BASE_PORT+1))..:$((BASE_PORT+SHARDS))"
+        echo "create a sharded table on the coordinator (port $BASE_PORT):"
+        for s in $(seq 1 $SHARDS); do
+          PORT=$((BASE_PORT + s))
+          if [ $s -lt $SHARDS ]; then
+            echo "  PARTITION p$((s-1)) VALUES LESS THAN (...) ON '127.0.0.1:$PORT',"
+          else
+            echo "  PARTITION p$((s-1)) VALUES LESS THAN (MAXVALUE) ON '127.0.0.1:$PORT'"
+          fi
+        done
+        wait
+
+  start-sharded-replica-cluster:
+    desc: |
+      Start a shard coordinator + replicated shard groups.
+        SHARDS=2        number of shard groups
+        REPLICAS=2      replicas per shard (first is leader, rest are followers)
+        BASE_PORT=5020  coordinator port; shard nodes follow sequentially
+      Node-ids use 127.<shard>.0.<replica> so each group has its own peers list.
+    vars:
+      SHARDS: '{{default "2" .SHARDS}}'
+      REPLICAS: '{{default "2" .REPLICAS}}'
+      BASE_PORT: '{{default "5020" .BASE_PORT}}'
+    cmds:
+      - rm -rf {{.DATA}}/sharded-repl && mkdir -p {{.DATA}}/sharded-repl
+      - |
+        BIN={{.BIN}}
+        DATA={{.DATA}}
+        TOKEN={{.TOKEN}}
+        SHARDS={{.SHARDS}}
+        REPLICAS={{.REPLICAS}}
+        BASE_PORT={{.BASE_PORT}}
+        COORD_ADDR=127.0.0.1:$BASE_PORT
+
+        trap 'kill $(jobs -p) 2>/dev/null' EXIT INT TERM
+
+        mkdir -p $DATA/sharded-repl/coord
+        $BIN --data-dir $DATA/sharded-repl/coord --token $TOKEN --port $BASE_PORT \
+          --log-level error --role coordinator &
+
+        for s in $(seq 1 $SHARDS); do
+          PEERS=""
+          for r in $(seq 1 $REPLICAS); do
+            PORT=$((BASE_PORT + (s - 1) * REPLICAS + r))
+            [ -n "$PEERS" ] && PEERS="$PEERS,"
+            PEERS="${PEERS}127.${s}.0.${r}:${PORT}"
+          done
+
+          LEADER_PORT=$((BASE_PORT + (s - 1) * REPLICAS + 1))
+          LEADER_ADDR=127.${s}.0.1:$LEADER_PORT
+
+          for r in $(seq 1 $REPLICAS); do
+            PORT=$((BASE_PORT + (s - 1) * REPLICAS + r))
+            NODE_ID=127.${s}.0.${r}
+            DIR=$DATA/sharded-repl/s${s}r${r}
+            mkdir -p $DIR
+            if [ $r -eq 1 ]; then
+              $BIN --data-dir $DIR --token $TOKEN --port $PORT --log-level error \
+                --role leader --node-id $NODE_ID --peers $PEERS \
+                --coordinator-addr $COORD_ADDR &
+            else
+              $BIN --data-dir $DIR --token $TOKEN --port $PORT --log-level error \
+                --role follower --node-id $NODE_ID --peers $PEERS \
+                --coordinator-addr $COORD_ADDR --leader-addr $LEADER_ADDR &
+            fi
+          done
+
+          echo "  shard $s: leader :$LEADER_PORT  followers :$((LEADER_PORT+1))..:$((BASE_PORT + s*REPLICAS))"
+        done
+
+        echo "sharded-replica cluster up — coordinator :$BASE_PORT  ($SHARDS shards x $REPLICAS replicas)"
+        echo "create a sharded table on the coordinator (port $BASE_PORT):"
+        for s in $(seq 1 $SHARDS); do
+          LEADER_PORT=$((BASE_PORT + (s - 1) * REPLICAS + 1))
+          if [ $s -lt $SHARDS ]; then
+            echo "  PARTITION p$((s-1)) VALUES LESS THAN (...) ON '127.0.0.1:$LEADER_PORT',"
+          else
+            echo "  PARTITION p$((s-1)) VALUES LESS THAN (MAXVALUE) ON '127.0.0.1:$LEADER_PORT'"
+          fi
+        done
+        wait

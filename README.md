@@ -235,21 +235,21 @@ VACUUM orders;
 - CMake ≥ 3.20
 - GCC or Clang with C++17 support
 - Linux (uses `pread`/`pwrite`, QUIC server requires msquic)
+- [Task](https://taskfile.dev) — `sudo snap install task --classic`
 
 ### Build
 
 ```bash
 git clone --recurse-submodules https://github.com/you/nyxdb
 cd nyxdb
-cmake -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build -j$(nproc)
+task build
 ```
 
-Debug build enables AddressSanitizer and UndefinedBehaviorSanitizer:
+Without Task, or for a debug build (AddressSanitizer + UndefinedBehaviorSanitizer):
 
 ```bash
-cmake -B build -DCMAKE_BUILD_TYPE=Debug
-cmake --build build -j$(nproc)
+cmake -B build-debug -DCMAKE_BUILD_TYPE=Debug
+cmake --build build-debug -j$(nproc)
 ```
 
 ### Embedded REPL
@@ -303,6 +303,13 @@ The server speaks a compact binary protocol over QUIC (msquic). All connections 
 ### Start a standalone server
 
 ```bash
+task start                              # default token + /tmp/nyxdb data dir
+task start TOKEN=supersecret DATA=/var/lib/nyxdb
+```
+
+Or directly:
+
+```bash
 ./build/nyxdb_server \
     --data-dir /var/lib/nyxdb \
     --token    supersecret \
@@ -338,37 +345,35 @@ Frames have a 9-byte header (`u32` length, `u8` type, `u32` query-id) followed b
 
 nyxdb supports asynchronous leader-follower replication. The leader streams its WAL to followers in real time. A Raft-inspired election protocol handles leader failure.
 
-### Start a three-node cluster
+### Start a replica cluster
 
 ```bash
-# Node A — leader
-./build/nyxdb_server \
-    --data-dir /data/node-a \
-    --token    clustertoken \
-    --port     4433 \
-    --node-id  node-a \
-    --role     leader \
-    --peers    node-a:4433,node-b:4434,node-c:4435
+# 3-node cluster (default) — leader on :5001, followers on :5002 :5003
+task start-replica-cluster
 
-# Node B — follower
-./build/nyxdb_server \
-    --data-dir /data/node-b \
-    --token    clustertoken \
-    --port     4434 \
-    --node-id  node-b \
-    --role     follower \
-    --peers    node-a:4433,node-b:4434,node-c:4435 \
-    --leader-addr node-a:4433
+# 5-node cluster starting at port 6000
+task start-replica-cluster NODES=5 BASE_PORT=6000
+```
 
-# Node C — follower
+`NODES` controls the total number of nodes. The first is always the initial leader; the rest start as followers. Node `i` gets port `BASE_PORT+i-1` and node-id `127.0.0.i`. The `--peers` list is built automatically from these, so quorum size is always correct.
+
+To start nodes manually:</p>
+
+```bash
+# peers must list every node including self
+PEERS=node-a:4433,node-b:4434,node-c:4435
+
 ./build/nyxdb_server \
-    --data-dir /data/node-c \
-    --token    clustertoken \
-    --port     4435 \
-    --node-id  node-c \
-    --role     follower \
-    --peers    node-a:4433,node-b:4434,node-c:4435 \
-    --leader-addr node-a:4433
+    --data-dir /data/node-a --token clustertoken --port 4433 \
+    --role leader --node-id node-a --peers $PEERS
+
+./build/nyxdb_server \
+    --data-dir /data/node-b --token clustertoken --port 4434 \
+    --role follower --node-id node-b --peers $PEERS --leader-addr node-a:4433
+
+./build/nyxdb_server \
+    --data-dir /data/node-c --token clustertoken --port 4435 \
+    --role follower --node-id node-c --peers $PEERS --leader-addr node-a:4433
 ```
 
 | Flag | Description |
@@ -428,55 +433,17 @@ The shard coordinator stores the partition map, propagates `CREATE TABLE` to eve
 ### Start a sharded cluster with replication
 
 ```bash
-# Shard 0 — leader
-./build/nyxdb_server \
-    --data-dir /data/s0-leader \
-    --token    shardtoken \
-    --port     4433 \
-    --role     leader \
-    --node-id  127.0.0.1 \
-    --peers    127.0.0.1:4433,127.0.0.2:4434 \
-    --coordinator-addr 127.0.0.1:4440
+# 2 shards x 2 replicas (default) — coordinator :5020, shards :5021-:5024
+task start-sharded-replica-cluster
 
-# Shard 0 — follower
-./build/nyxdb_server \
-    --data-dir /data/s0-follower \
-    --token    shardtoken \
-    --port     4434 \
-    --role     follower \
-    --node-id  127.0.0.2 \
-    --peers    127.0.0.1:4433,127.0.0.2:4434 \
-    --leader-addr      127.0.0.1:4433 \
-    --coordinator-addr 127.0.0.1:4440
+# 3 shards x 3 replicas
+task start-sharded-replica-cluster SHARDS=3 REPLICAS=3
 
-# Shard 1 — leader
-./build/nyxdb_server \
-    --data-dir /data/s1-leader \
-    --token    shardtoken \
-    --port     4435 \
-    --role     leader \
-    --node-id  127.0.0.3 \
-    --peers    127.0.0.3:4435,127.0.0.4:4436 \
-    --coordinator-addr 127.0.0.1:4440
-
-# Shard 1 — follower
-./build/nyxdb_server \
-    --data-dir /data/s1-follower \
-    --token    shardtoken \
-    --port     4436 \
-    --role     follower \
-    --node-id  127.0.0.4 \
-    --peers    127.0.0.3:4435,127.0.0.4:4436 \
-    --leader-addr      127.0.0.3:4435 \
-    --coordinator-addr 127.0.0.1:4440
-
-# Coordinator
-./build/nyxdb_server \
-    --data-dir /data/coord \
-    --token    shardtoken \
-    --port     4440 \
-    --role     coordinator
+# Shard-only, no replication (standalone shards)
+task start-shard-cluster SHARDS=3
 ```
+
+`SHARDS` controls the number of shard groups and `REPLICAS` the number of nodes per group. The coordinator always starts at `BASE_PORT`. Shard `s`, replica `r` gets port `BASE_PORT+(s-1)*REPLICAS+r` and node-id `127.s.0.r`, so each shard group has its own isolated `--peers` list. The first replica in each group starts as leader; the rest start as followers pointed at it.
 
 | Flag | Description |
 |---|---|
@@ -525,44 +492,28 @@ PARTITION BY RANGE (id) (
 
 ### Start a cluster with replica coordinators
 
+Replica coordinators are started as separate standalone processes before the shard nodes. Each shard node is then given `--read-coordinator-addr` pointing to its group's replica coordinator, in addition to `--coordinator-addr` for the shard coordinator. There is no dedicated Taskfile task for this topology yet; start the processes manually:
+
 ```bash
-# Replica coordinator — shard 0
+# One replica coordinator per shard group
 ./build/nyxdb_server \
-    --data-dir /data/rc0 \
-    --token    shardtoken \
-    --port     4437 \
-    --role     read-coordinator
+    --data-dir /data/rc0 --token shardtoken --port 4437 --role read-coordinator
 
-# Replica coordinator — shard 1
 ./build/nyxdb_server \
-    --data-dir /data/rc1 \
-    --token    shardtoken \
-    --port     4438 \
-    --role     read-coordinator
+    --data-dir /data/rc1 --token shardtoken --port 4438 --role read-coordinator
 
-# Shard 0 — leader (registers with rc0 and notifies it on promotion)
+# Shard nodes pass both coordinator addresses
+PEERS_S0=127.0.0.1:4433,127.0.0.2:4434
+
 ./build/nyxdb_server \
-    --data-dir /data/s0-leader \
-    --token    shardtoken \
-    --port     4433 \
-    --role     leader \
-    --node-id  127.0.0.1 \
-    --peers    127.0.0.1:4433,127.0.0.2:4434 \
-    --coordinator-addr       127.0.0.1:4440 \
-    --read-coordinator-addr  127.0.0.1:4437
+    --data-dir /data/s0-leader --token shardtoken --port 4433 \
+    --role leader --node-id 127.0.0.1 --peers $PEERS_S0 \
+    --coordinator-addr 127.0.0.1:4440 --read-coordinator-addr 127.0.0.1:4437
 
-# Shard 0 — follower
 ./build/nyxdb_server \
-    --data-dir /data/s0-follower \
-    --token    shardtoken \
-    --port     4434 \
-    --role     follower \
-    --node-id  127.0.0.2 \
-    --peers    127.0.0.1:4433,127.0.0.2:4434 \
-    --leader-addr            127.0.0.1:4433 \
-    --read-coordinator-addr  127.0.0.1:4437
-
-# Shard 1 and coordinator started similarly...
+    --data-dir /data/s0-follower --token shardtoken --port 4434 \
+    --role follower --node-id 127.0.0.2 --peers $PEERS_S0 \
+    --leader-addr 127.0.0.1:4433 --read-coordinator-addr 127.0.0.1:4437
 ```
 
 Each shard node sends a `REGISTER_NODE` frame to its replica coordinator on startup, declaring its address and whether it is currently the leader. On leader election, the new leader sends `NOTIFY_LEADER` to both the shard coordinator and the replica coordinator so both are updated atomically.
@@ -641,11 +592,23 @@ On `Database::open` / `Catalog::load`:
 ## Building
 
 ```bash
-# Release (optimised, -O3 -march=native)
-cmake -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build -j$(nproc)
+task build          # Release (-O3 -march=native)
+task format         # clang-format all sources in-place
+task test           # run all 65 test suites in parallel
+task test FILTER=sharding_replication_mp_test   # run one suite by name
+```
 
-# Debug (ASan + UBSan)
+Docker:
+
+```bash
+task docker-build                              # builds image tagged 'nyxdb'
+task docker-build IMAGE=myregistry/nyxdb:1.0
+task docker-push  IMAGE=myregistry/nyxdb:1.0
+```
+
+For a debug build (ASan + UBSan), invoke cmake directly — there is no task for it since sanitizer builds are incompatible with the release binary used by integration tests:
+
+```bash
 cmake -B build-debug -DCMAKE_BUILD_TYPE=Debug
 cmake --build build-debug -j$(nproc)
 ```
@@ -663,11 +626,9 @@ cmake --build build-debug -j$(nproc)
 ## Testing
 
 ```bash
-# Run everything
-ctest --test-dir build --output-on-failure -j$(nproc)
-
-# Run a single suite
-ctest --test-dir build -R vacuum_test --output-on-failure
+task test                        # run all suites in parallel
+task test FILTER=vacuum_test     # run one suite by name
+task test FILTER=sharding        # run all suites whose name contains "sharding"
 ```
 
 There are 65 test suites spanning every layer:
