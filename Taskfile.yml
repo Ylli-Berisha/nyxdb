@@ -1,7 +1,8 @@
 version: '3'
 
 vars:
-  BIN: './build/nyxdb_server'
+  BIN: './build/src/nyxdb_server'
+  CLIENT: './build/src/nyxdb_client'
   DATA: '/tmp/nyxdb'
   TOKEN: 'devtoken'
   IMAGE: 'nyxdb'
@@ -35,6 +36,14 @@ tasks:
       FILTER: '{{default ".*" .FILTER}}'
     cmds:
       - ctest --test-dir build -R '{{.FILTER}}' --output-on-failure -j$(nproc)
+
+  connect:
+    desc: Open an interactive SQL session  (HOST, PORT, TOKEN overridable)
+    vars:
+      HOST: '{{default "127.0.0.1" .HOST}}'
+      PORT: '{{default "4433" .PORT}}'
+    cmds:
+      - '{{.CLIENT}} --host {{.HOST}} --port {{.PORT}} --token {{.TOKEN}}'
 
   start:
     desc: Start a standalone server on port 4433  (TOKEN, DATA overridable)

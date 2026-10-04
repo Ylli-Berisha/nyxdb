@@ -32,6 +32,7 @@ A columnar analytical database written from scratch in C++17. Persistent immutab
 | **Maintenance** | Background merge worker (consolidates small segments), `VACUUM` for dead-row compaction |
 | **Query engine** | Volcano-model executor: `TableScan`, `IndexScan`, `Filter`, `Project`, `Sort`, `Limit`, `HashAggregate`, `HashJoin` (equi-join only) |
 | **Server** | QUIC transport (msquic), binary frame protocol, token authentication |
+| **Client** | Interactive SQL REPL (`nyxdb_client`): persistent QUIC session, aligned table output, multi-line input, `\dt` / `\d` meta-commands |
 | **Replication** | Leader-follower, Raft-like election, WAL streaming, snapshot bootstrap |
 | **Sharding** | Range-based horizontal partitioning, shard coordinator routes SQL, automatic leader-failover notification |
 | **Read scaling** | `ReplicaCoordinator` proxy per shard group; SELECTs are round-robin distributed across all replicas, writes forwarded to the current leader |
@@ -322,6 +323,74 @@ Or directly:
 | `--token` | required | Shared auth token for all clients |
 | `--port` | `4433` | UDP port (QUIC) |
 | `--log-level` | `warn` | `trace` `debug` `info` `warn` `error` |
+
+### Connect
+
+```bash
+task connect                              # connects to 127.0.0.1:4433 with devtoken
+task connect HOST=10.0.0.1 PORT=5001 TOKEN=supersecret
+```
+
+Or directly:
+
+```bash
+./build/src/nyxdb_client --host 127.0.0.1 --port 4433 --token devtoken
+```
+
+```
+nyxdb 127.0.0.1:4433> CREATE TABLE t (id INT PRIMARY KEY, val DOUBLE);
+OK
+nyxdb 127.0.0.1:4433> INSERT INTO t VALUES (1, 3.14), (2, 2.71);
+2 rows affected
+nyxdb 127.0.0.1:4433> SELECT * FROM t ORDER BY id;
+ id | val
+----+------
+  1 | 3.14
+  2 | 2.71
+(2 rows)
+nyxdb 127.0.0.1:4433> \dt
+nyxdb 127.0.0.1:4433> \d t
+nyxdb 127.0.0.1:4433> \q
+```
+
+| Meta-command | Expands to |
+|---|---|
+| `\q` / `exit` / `quit` | Close session |
+| `\dt` | `SHOW TABLES;` |
+| `\d <table>` | `SHOW COLUMNS FROM <table>;` |
+
+Multi-line statements are buffered until the `;` terminator. Errors are printed and the session stays open.
+
+### Docker
+
+Both `nyxdb_server` and `nyxdb_client` are included in the image. QUIC uses UDP, and Docker Desktop's UDP NAT drops multi-frame result sets, so put both containers on the same bridge network to avoid NAT entirely.
+
+```bash
+# create a shared network once
+docker network create nyxdb-net
+
+# start the server
+docker run -d --name nyxdb --network nyxdb-net \
+    -v nyxdb_data:/data \
+    ylliberisha/nyxdb:latest \
+    --data-dir /data --token devtoken --port 4433
+
+# get the server's IP (or just use the container name as hostname)
+docker inspect nyxdb --format='{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}'
+# → e.g. 172.18.0.2
+
+# open an interactive SQL session
+docker run --rm -it --entrypoint nyxdb_client --network nyxdb-net \
+    ylliberisha/nyxdb:latest \
+    --host 172.18.0.2 --port 4433 --token devtoken
+```
+
+Alternatively, `docker exec` into the running server container:
+
+```bash
+docker exec -it nyxdb sh -c \
+  "echo 'SELECT 1;' | nyxdb_client --host 127.0.0.1 --port 4433 --token devtoken"
+```
 
 ### Wire protocol
 

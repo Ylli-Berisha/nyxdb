@@ -66,3 +66,6 @@ target_link_libraries(nyxdb_server_lib PUBLIC nyxdb_core msquic)
 
 add_executable(nyxdb_server main_server.cpp)
 target_link_libraries(nyxdb_server PRIVATE nyxdb_server_lib)
+
+add_executable(nyxdb_client client/main.cpp)
+target_link_libraries(nyxdb_client PRIVATE nyxdb_server_lib)
